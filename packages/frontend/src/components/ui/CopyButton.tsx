@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { clsx } from 'clsx';
-import { isClipboardAvailable, copyToClipboard } from '../../lib/clipboard';
+import { isClipboardAvailable, copyToClipboard, getClipboardUnavailableMessage } from '../../lib/clipboard';
 
 interface CopyButtonProps {
   value: string;
@@ -52,7 +52,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
         onClick={handleCopy}
         disabled={!canCopy}
         aria-label={copied ? 'Copied' : label}
-        title={!canCopy ? 'Copy requires HTTPS connection' : copied ? 'Copied!' : label}
+        title={!canCopy ? getClipboardUnavailableMessage() : copied ? 'Copied!' : label}
         className={clsx(
           'inline-flex items-center justify-center rounded-md transition-colors duration-fast focus-visible:outline-2 focus-visible:outline focus-visible:outline-primary focus-visible:outline-offset-2',
           size === 'sm' ? 'h-6 w-6' : 'h-7 w-7',
@@ -72,7 +72,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
       type="button"
       onClick={handleCopy}
       disabled={!canCopy}
-      title={!canCopy ? 'Copy requires HTTPS connection' : undefined}
+      title={!canCopy ? getClipboardUnavailableMessage() : undefined}
       className={clsx(
         'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-all duration-fast focus-visible:outline-2 focus-visible:outline focus-visible:outline-primary focus-visible:outline-offset-2',
         !canCopy

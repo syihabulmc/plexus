@@ -8,10 +8,14 @@
 
 /**
  * Check if clipboard operations are available in the current context.
- * Requires secure context (HTTPS or localhost) for modern Clipboard API.
+ * Returns true if either the modern Clipboard API (HTTPS/localhost) or
+ * the legacy execCommand fallback (HTTP) is available.
  */
 export const isClipboardAvailable = (): boolean => {
-  return typeof navigator !== 'undefined' && !!navigator.clipboard;
+  if (typeof navigator === 'undefined') return false;
+  if (!!navigator.clipboard) return true;
+  // Legacy fallback: document.execCommand('copy') works in HTTP contexts
+  return typeof document !== 'undefined' && typeof document.execCommand === 'function';
 };
 
 /**
@@ -24,29 +28,58 @@ export const isSecureContext = (): boolean => {
 
 /**
  * Get a user-friendly message explaining why clipboard is unavailable.
+ * With the execCommand fallback, this should rarely be needed.
  */
 export const getClipboardUnavailableMessage = (): string => {
-  if (!isSecureContext()) {
-    return 'Copy requires HTTPS connection';
-  }
   return 'Copy not available in this browser';
 };
 
 /**
- * Attempt to copy text to clipboard.
- * Returns success status. Falls back gracefully in non-secure contexts.
+ * Copy text to clipboard using a temporary textarea and execCommand.
+ * Works in non-secure contexts (HTTP) where navigator.clipboard is unavailable.
  */
-export const copyToClipboard = async (text: string): Promise<boolean> => {
-  if (!isClipboardAvailable()) {
-    return false;
+const copyWithExecCommand = (text: string): boolean => {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+
+  // Prevent scrolling and make invisible
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '-9999px';
+  textarea.style.opacity = '0';
+
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  let success = false;
+  try {
+    success = document.execCommand('copy');
+  } catch {
+    success = false;
   }
 
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
+  document.body.removeChild(textarea);
+  return success;
+};
+
+/**
+ * Attempt to copy text to clipboard.
+ * Tries the modern Clipboard API first (HTTPS/localhost),
+ * then falls back to execCommand for non-secure contexts (HTTP).
+ */
+export const copyToClipboard = async (text: string): Promise<boolean> => {
+  // Try modern Clipboard API first (secure contexts)
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to legacy fallback
+    }
   }
+
+  // Legacy fallback for non-secure contexts (HTTP)
+  return copyWithExecCommand(text);
 };
 
 /**
