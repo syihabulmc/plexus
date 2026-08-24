@@ -201,8 +201,13 @@ export function initializeDatabase(connectionString?: string) {
         schema,
       });
     } else {
+      // Auto-detect SSL from connection string sslmode parameter
+      const needsSsl =
+        /[?&]sslmode=(require|verify-ca|verify-full)/i.test(connStr) ||
+        process.env.PLEXUS_DB_SSL === 'true';
+
       sqlClient = postgres(connStr, {
-        ssl: false,
+        ssl: needsSsl ? { rejectUnauthorized: false } : false,
         max: 10,
         idle_timeout: 20,
         connect_timeout: 10,
