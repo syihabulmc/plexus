@@ -257,6 +257,7 @@ jobs:
 
       - name: Run release notes agent
         id: release_notes_agent
+        continue-on-error: true
         # claude-code-action detects GitHub event type (PR/issue/comment) and
         # rejects unsupported ones, including `push` — which is how this
         # workflow is triggered. The base-action/ subdirectory of the same
