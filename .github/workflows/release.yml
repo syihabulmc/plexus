@@ -337,11 +337,6 @@ jobs:
           bun run compile:linux-arm64
           bun run compile:macos
           bun run compile:windows
-          bun run compile:cli:linux-amd64
-          bun run compile:cli:linux-arm64
-          bun run compile:cli:macos-amd64
-          bun run compile:cli:macos-arm64
-          bun run compile:cli:windows
 
       - name: Upload binaries
         uses: actions/upload-artifact@v7
@@ -352,11 +347,6 @@ jobs:
             plexus-linux-arm64
             plexus-macos
             plexus.exe
-            plexuscli-linux-amd64
-            plexuscli-linux-arm64
-            plexuscli-macos-amd64
-            plexuscli-macos-arm64
-            plexuscli.exe
           retention-days: 1
 
   # ── Build Docker Image (per-arch, cache-isolated) ─────────────────────
@@ -482,59 +472,13 @@ jobs:
           exit 1
 
   # ── Publish CLI to npm ─────────────────────────────────────────────────
-  publish-cli:
-    name: Publish CLI to npm
-    needs: [setup, quality-gates]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.0
-
-      - name: Set up Node for npm trusted publishing
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Test CLI package
-        run: |
-          bun run --cwd packages/cli test
-          bun run --cwd packages/cli typecheck
-
-      - name: Set next CLI patch version
-        run: |
-          package_name=$(node -p "require('./packages/cli/package.json').name")
-          latest_version=$(npm view "$package_name" version)
-          next_version=$(node -e '
-            const [major, minor, patch] = process.argv[1].split(".").map(Number);
-            if (![major, minor, patch].every(Number.isInteger)) process.exit(1);
-            console.log(`${major}.${minor}.${patch + 1}`);
-          ' "$latest_version")
-          npm pkg set "version=$next_version" --workspace="$package_name"
-          echo "Publishing $package_name@$next_version"
-
-      - name: Publish CLI
-        run: npm publish --workspace=@mcowger/plexus-cli --access public
-
   # ── Verify binary arch inside each platform image ─────────────────────
   # Catches the exact failure mode from issue #550: an arm64-labelled image
   # that actually contains an x86-64 binary.
   # ── Create Release ─────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [setup, build-binaries, build-docker-manifest, generate-release-notes, publish-cli]
+    needs: [setup, build-binaries, build-docker-manifest, generate-release-notes]
     runs-on: ubuntu-latest
     steps:
       - name: Download binaries
@@ -553,10 +497,5 @@ jobs:
             release/plexus-linux-arm64
             release/plexus-macos
             release/plexus.exe
-            release/plexuscli-linux-amd64
-            release/plexuscli-linux-arm64
-            release/plexuscli-macos-amd64
-            release/plexuscli-macos-arm64
-            release/plexuscli.exe
           draft: false
           prerelease: false

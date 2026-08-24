@@ -6,7 +6,7 @@ get:
     Returns a database backup. Two modes are available:
 
     - **Config-only** (default): Returns a JSON envelope containing all configuration
-      tables (providers, model aliases, API keys, user quotas, MCP servers, system
+      tables (providers, model aliases, API keys, user quotas, system
       settings, OAuth credentials). This is small and fast — suitable for most
       backup, migration, and cloning scenarios.
 

@@ -171,23 +171,6 @@ Names must match `^[a-z0-9][a-z0-9-_]{1,62}$`.
 
 If quota status returns 404 for a key that is visible in `/v0/management/keys`, treat it as an API/runtime consistency issue and report both facts. Do not silently claim the key is absent.
 
-## MCP Gateway
-
-| Action | Method | Path |
-| --- | --- | --- |
-| List MCP servers | `GET` | `/v0/management/mcp-servers` |
-| Create or replace server | `PUT` | `/v0/management/mcp-servers/{serverName}` |
-| Delete server | `DELETE` | `/v0/management/mcp-servers/{serverName}` |
-| List MCP logs | `GET` | `/v0/management/mcp-logs` |
-| Delete one MCP log | `DELETE` | `/v0/management/mcp-logs/{requestId}` |
-| Delete MCP logs | `DELETE` | `/v0/management/mcp-logs?olderThanDays=N` |
-
-Minimal MCP server body:
-
-```json
-{"upstream_url":"https://mcp.example.com","enabled":true,"headers":{}}
-```
-
 ## General Configuration
 
 | Action | Method | Path |

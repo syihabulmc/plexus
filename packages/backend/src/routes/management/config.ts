@@ -4,7 +4,6 @@ import {
   ProviderConfigSchema,
   ModelConfigSchema,
   KeyConfigSchema,
-  McpServerConfigSchema,
   CompactionConfigSchema,
   normalizeKeyConfig,
   assertNoAliasRefCycles,
@@ -18,13 +17,10 @@ import {
   validateCheckerOptions,
 } from '../../services/quota/checker-registry';
 import { UsageStorageService } from '../../services/observability/usage-storage';
-import { validateServerName } from '../../services/mcp-proxy/mcp-proxy-service';
-import { mcpProcessManager } from '../../services/mcp-local/mcp-process-manager';
 import { VisionDescriptorService } from '../../services/vision/vision-descriptor-service';
 import { decryptField } from '../../utils/encryption';
 import type { GpuParams, ModelArchitecture } from '@plexus/shared';
 import { DEFAULT_GPU_PARAMS } from '@plexus/shared';
-import { McpKeyCreateSchema } from '@plexus/shared';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -55,20 +51,6 @@ function validateProviderQuotaChecker(config: {
 
   const parsed = validateCheckerOptions(quotaChecker.type, options);
   return parsed.success ? { valid: true } : { valid: false, details: parsed.error.issues };
-}
-
-function serializeMcpKey(key: {
-  id: number;
-  key: string;
-  isActive: boolean | number;
-  cooldownUntil: Date | number | null;
-}) {
-  return {
-    id: key.id,
-    key: decryptField(key.key) as string,
-    is_active: key.isActive === true || key.isActive === 1,
-    cooldown_until: key.cooldownUntil ? new Date(key.cooldownUntil).toISOString() : null,
-  };
 }
 
 function mergeCompactionPatch(
@@ -168,7 +150,6 @@ export async function registerConfigRoutes(
         modelAliasCount: Object.keys(config.models ?? {}).length,
         keyCount: Object.keys(config.keys ?? {}).length,
         quotaCount: Object.keys(config.user_quotas ?? {}).length,
-        mcpServerCount: Object.keys(config.mcpServers ?? config.mcp_servers ?? {}).length,
       });
     } catch (e: any) {
       return reply.code(500).send({ error: 'Internal server error' });
@@ -1091,224 +1072,6 @@ export async function registerConfigRoutes(
   fastify.post('/v0/management/cache/vision-descriptor/clear', async (_request, reply) => {
     VisionDescriptorService.clearCache();
     return reply.send({ success: true, message: 'Vision descriptor cache cleared.' });
-  });
-
-  // ─── MCP Servers ──────────────────────────────────────────────────
-
-  fastify.get('/v0/management/mcp-servers', async (_request, reply) => {
-    try {
-      const servers = await configService.getRepository().getAllMcpServers();
-      return reply.send(servers);
-    } catch (e: any) {
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
-  });
-
-  fastify.get('/v0/management/mcp-servers/:serverName', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-
-    try {
-      const servers = await configService.getRepository().getAllMcpServers();
-      const server = servers[serverName];
-      if (!server) {
-        return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-      }
-      return reply.send({ name: serverName, ...server });
-    } catch (e: any) {
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
-  });
-
-  fastify.get('/v0/management/mcp-servers/:serverName/keys', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    const keys = await configService.getRepository().getMcpServerKeys(serverName);
-    if (!keys) return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-    return reply.send({ keys: keys.map(serializeMcpKey) });
-  });
-
-  fastify.post('/v0/management/mcp-servers/:serverName/keys', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    const result = McpKeyCreateSchema.safeParse(request.body);
-    if (!result.success) {
-      return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-    }
-
-    const key = await configService
-      .getRepository()
-      .addMcpServerKey(serverName, result.data.key, result.data.is_active ?? true);
-    if (!key) return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-    return reply.code(201).send(serializeMcpKey(key));
-  });
-
-  fastify.delete('/v0/management/mcp-servers/:serverName/keys/:keyId', async (request, reply) => {
-    const { serverName, keyId } = request.params as { serverName: string; keyId: string };
-    const id = Number(keyId);
-    if (!Number.isSafeInteger(id) || id < 1) {
-      return reply.code(400).send({ error: 'keyId must be a positive integer' });
-    }
-    const deleted = await configService.getRepository().deleteMcpServerKey(serverName, id);
-    if (!deleted) return reply.code(404).send({ error: `MCP key '${keyId}' not found` });
-    return reply.send({ success: true });
-  });
-
-  fastify.post(
-    '/v0/management/mcp-servers/:serverName/keys/:keyId/clear-cooldown',
-    async (request, reply) => {
-      const { serverName, keyId } = request.params as { serverName: string; keyId: string };
-      const id = Number(keyId);
-      if (!Number.isSafeInteger(id) || id < 1) {
-        return reply.code(400).send({ error: 'keyId must be a positive integer' });
-      }
-      const cleared = await configService.getRepository().clearMcpServerKeyCooldown(serverName, id);
-      if (!cleared) return reply.code(404).send({ error: `MCP key '${keyId}' not found` });
-      return reply.send({ success: true });
-    }
-  );
-
-  fastify.put('/v0/management/mcp-servers/:serverName', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-
-    if (!validateServerName(serverName)) {
-      return reply.code(400).send({
-        error:
-          'Invalid server name. Must be a non-reserved slug (lowercase letters, numbers, hyphens, underscores, 2-63 characters)',
-      });
-    }
-
-    const result = McpServerConfigSchema.safeParse(request.body);
-    if (!result.success) {
-      return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-    }
-
-    try {
-      await configService.saveMcpServer(serverName, result.data);
-      logger.debug(`MCP server '${serverName}' saved via API (PUT)`);
-      return reply.send({ success: true, name: serverName });
-    } catch (e: any) {
-      logger.error(`Failed to save MCP server '${serverName}'`, e);
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
-  });
-
-  fastify.patch('/v0/management/mcp-servers/:serverName', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    const body = request.body as Record<string, unknown> | null;
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return reply.code(400).send({ error: 'Object body is required' });
-    }
-
-    if (!validateServerName(serverName)) {
-      return reply.code(400).send({
-        error:
-          'Invalid server name. Must be a non-reserved slug (lowercase letters, numbers, hyphens, underscores, 2-63 characters)',
-      });
-    }
-
-    try {
-      const servers = await configService.getRepository().getAllMcpServers();
-      const existing = servers[serverName];
-      if (!existing) {
-        return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-      }
-      const merged = { ...existing, ...body };
-      const result = McpServerConfigSchema.safeParse(merged);
-      if (!result.success) {
-        return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-      }
-      await configService.saveMcpServer(serverName, result.data);
-      logger.debug(`MCP server '${serverName}' updated via API (PATCH)`);
-      return reply.send({ success: true, name: serverName });
-    } catch (e: any) {
-      logger.error(`Failed to patch MCP server '${serverName}'`, e);
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
-  });
-
-  fastify.delete('/v0/management/mcp-servers/:serverName', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-
-    try {
-      await configService.deleteMcpServer(serverName);
-      logger.debug(`MCP server '${serverName}' deleted via API`);
-      return reply.send({ success: true });
-    } catch (e: any) {
-      logger.error(`Failed to delete MCP server '${serverName}'`, e);
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
-  });
-
-  fastify.get('/v0/management/mcp-servers/:serverName/status', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    logger.info(`MCP local status requested for '${serverName}'`);
-    const servers = await configService.getRepository().getAllMcpServers();
-    const server = servers[serverName];
-    if (!server) return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-    return reply.send(mcpProcessManager.getStatus(serverName, server));
-  });
-
-  fastify.post('/v0/management/mcp-servers/:serverName/start', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    logger.info(`MCP local start requested for '${serverName}'`);
-    const servers = await configService.getRepository().getAllMcpServers();
-    const server = servers[serverName];
-    if (!server) return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-    if (server.mode !== 'local_http')
-      return reply.code(400).send({ error: 'MCP server is not local_http' });
-    return reply.send(await mcpProcessManager.start(serverName, server));
-  });
-
-  fastify.post('/v0/management/mcp-servers/:serverName/stop', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    logger.info(`MCP local stop requested for '${serverName}'`);
-    return reply.send(await mcpProcessManager.stop(serverName));
-  });
-
-  fastify.post('/v0/management/mcp-servers/:serverName/restart', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    logger.info(`MCP local restart requested for '${serverName}'`);
-    const servers = await configService.getRepository().getAllMcpServers();
-    const server = servers[serverName];
-    if (!server) return reply.code(404).send({ error: `MCP server '${serverName}' not found` });
-    if (server.mode !== 'local_http')
-      return reply.code(400).send({ error: 'MCP server is not local_http' });
-    return reply.send(await mcpProcessManager.restart(serverName, server));
-  });
-
-  fastify.get('/v0/management/mcp-servers/:serverName/process-logs', async (request, reply) => {
-    const { serverName } = request.params as { serverName: string };
-    logger.info(`MCP local process logs requested for '${serverName}'`);
-    return reply.send({ data: mcpProcessManager.getLogs(serverName) });
-  });
-
-  // ─── MCP Server Enabled ──────────────────────────────────────────
-
-  fastify.get('/v0/management/config/mcp-enabled', async (_request, reply) => {
-    try {
-      const enabled = await configService.getSetting<boolean>('mcpEnabled', true);
-      return reply.send({ enabled });
-    } catch (e: any) {
-      logger.error('Failed to read mcp-enabled setting', e);
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
-  });
-
-  fastify.patch('/v0/management/config/mcp-enabled', async (request, reply) => {
-    const body = request.body as Record<string, unknown> | null;
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return reply.code(400).send({ error: 'Object body is required' });
-    }
-    if (typeof body.enabled !== 'boolean') {
-      return reply.code(400).send({ error: 'enabled must be a boolean' });
-    }
-
-    try {
-      await configService.setSetting('mcpEnabled', body.enabled);
-      logger.debug(`MCP server ${body.enabled ? 'enabled' : 'disabled'} via API`);
-      return reply.send({ enabled: body.enabled });
-    } catch (e: any) {
-      logger.error('Failed to update mcp-enabled setting', e);
-      return reply.code(500).send({ error: 'Internal server error' });
-    }
   });
 
   // ─── Quota Checker Types ──────────────────────────────────────────

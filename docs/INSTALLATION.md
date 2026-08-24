@@ -29,7 +29,6 @@ docker run -p 4000:4000 \
 -   `ADMIN_KEY` is required — set it to a secure password for accessing the admin dashboard and management API.
 -   `DATABASE_URL` is optional (defaults to SQLite at `./data/plexus.db` when unset) — set it to a `sqlite://` path (inside the mounted volume) or a `postgres://` connection string when connecting to PostgreSQL or custom locations.
 -   Set `LOG_LEVEL` to control verbosity.
--   The Docker image includes `bunx` and `uvx` so Plexus can run configured Local HTTP MCP servers inside the container.
 
 ## Building the Docker Image
 

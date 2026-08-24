@@ -12,8 +12,6 @@ import { registerQuotaRoutes } from './management/quotas';
 import { registerQuotaEnforcementRoutes } from './management/quota-enforcement';
 import { registerUserQuotaRoutes } from './management/user-quotas';
 import { registerOAuthRoutes } from './management/oauth';
-import { registerMcpLogRoutes } from './management/mcp-logs';
-import { registerMcpOAuthManagementRoutes } from './management/mcp-oauth';
 import { registerLoggingRoutes } from './management/logging';
 import { registerRestartRoutes } from './management/restart';
 import { registerProviderRoutes } from './management/providers';
@@ -28,7 +26,6 @@ import { Dispatcher } from '../services/dispatch/dispatcher';
 import { ProbeService } from '../services/probes/probe-service';
 import { QuotaScheduler } from '../services/quota/quota-scheduler';
 import { QuotaEnforcer } from '../services/quota/quota-enforcer';
-import { McpUsageStorageService } from '../services/mcp-proxy/mcp-usage-storage';
 
 export async function registerManagementRoutes(
   fastify: FastifyInstance,
@@ -36,7 +33,6 @@ export async function registerManagementRoutes(
   dispatcher: Dispatcher,
   probeService: ProbeService,
   quotaScheduler?: QuotaScheduler,
-  mcpUsageStorage?: McpUsageStorageService,
   quotaEnforcer?: QuotaEnforcer
 ) {
   // Encapsulate all management routes in their own scope so the management
@@ -110,10 +106,6 @@ export async function registerManagementRoutes(
       if (quotaScheduler) {
         await registerQuotaRoutes(adminOnly, quotaScheduler);
       }
-      if (mcpUsageStorage) {
-        await registerMcpLogRoutes(adminOnly, mcpUsageStorage);
-      }
-      await registerMcpOAuthManagementRoutes(adminOnly);
       if (quotaEnforcer) {
         await registerQuotaEnforcementRoutes(adminOnly, quotaEnforcer);
       }
@@ -121,7 +113,7 @@ export async function registerManagementRoutes(
       // Model routes for AI energy calculations
       await registerModelRoutes(adminOnly);
       // Backup and restore routes
-      await registerBackupRoutes(adminOnly, usageStorage, mcpUsageStorage);
+      await registerBackupRoutes(adminOnly, usageStorage);
       // Concurrency (live snapshot + historical timeline)
       await registerConcurrencyRoutes(adminOnly, usageStorage);
       await registerCustomCheckerRoutes(adminOnly, quotaScheduler ?? QuotaScheduler.getInstance());

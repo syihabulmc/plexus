@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { McpServerConfigSchema } from '@plexus/shared';
 import { logger } from './utils/logger';
 import { DEFAULT_VISION_DESCRIPTION_PROMPT } from './utils/constants';
 import { isValidIpRule } from './utils/ip-match';
@@ -774,8 +773,6 @@ const QuotaConfigSchema = z.object({
   options: z.record(z.string(), z.any()).default({}),
 });
 
-export { McpServerConfigSchema } from '@plexus/shared';
-
 const CooldownPolicySchema = z.object({
   initialMinutes: z.number().min(0.1).default(2),
   maxMinutes: z.number().min(0.1).default(300),
@@ -801,16 +798,6 @@ const StallConfigSchema = z.object({
   stallCooldown: z.boolean().default(false).optional(),
 });
 
-export const McpOAuthConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  provider: z.enum(['plexus-idp']).default('plexus-idp'),
-  /**
-   * Optional externally-visible base URL. If omitted, OAuth metadata and
-   * validation are derived from the incoming request origin.
-   */
-  issuer: z.string().url().optional(),
-});
-
 const RawPlexusConfigSchema = z
   .object({
     providers: z.record(z.string(), ProviderConfigSchema),
@@ -825,8 +812,6 @@ const RawPlexusConfigSchema = z
     timeout: z.object({ defaultSeconds: z.number().min(1).max(3600).default(300) }).optional(),
     stall: StallConfigSchema.optional(),
     backgroundExploration: BackgroundExplorationConfigSchema.optional(),
-    mcpOAuth: McpOAuthConfigSchema.optional(),
-    mcp_servers: z.record(z.string(), McpServerConfigSchema).optional(),
     user_quotas: z.record(z.string(), QuotaDefinitionSchema).optional(),
     // Applied to keys with NO quotas assigned (`quotas` absent/empty). Non-stacking:
     // a key either uses its own `quotas` or falls back to this list, never both.
@@ -847,15 +832,12 @@ export type StallConfigType = {
   gracePeriodSeconds?: number;
   stallCooldown?: boolean;
 };
-export type McpOAuthConfig = z.infer<typeof McpOAuthConfigSchema>;
 export type PlexusConfig = z.infer<typeof RawPlexusConfigSchema> & {
   failover: FailoverPolicy;
   cooldown?: CooldownPolicy;
   timeout?: TimeoutConfig;
   stall?: StallConfigType;
   quotas: QuotaConfig[];
-  mcpServers?: Record<string, McpServerConfig>;
-  mcpOAuth?: McpOAuthConfig;
   // Immediate-peer IPs/CIDRs whose forwarding headers are trusted when
   // resolving the client IP. Semantics:
   //  - undefined: legacy trust-all before DB-backed config is loaded
@@ -881,7 +863,6 @@ export type ModelTargetGroup = z.infer<typeof ModelTargetGroupSchema>;
 export type SelectorType = z.infer<typeof SelectorTypeSchema>;
 export type QuotaConfig = z.infer<typeof QuotaConfigSchema>;
 export type QuotaDefinition = z.infer<typeof QuotaDefinitionSchema>;
-export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
 /**
  * Extract supported API types from the provider configuration.
@@ -1031,7 +1012,6 @@ function hydrateConfig(config: z.infer<typeof RawPlexusConfigSchema>): PlexusCon
     failover: FailoverPolicySchema.parse(config.failover ?? {}),
     cooldown: CooldownPolicySchema.parse(config.cooldown ?? {}),
     quotas: buildProviderQuotaConfigs(config),
-    mcpServers: config.mcp_servers,
   };
 }
 

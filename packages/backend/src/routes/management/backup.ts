@@ -2,12 +2,10 @@ import { FastifyInstance } from 'fastify';
 import { logger } from '../../utils/logger';
 import { BackupService } from '../../services/configuration/backup-service';
 import type { UsageStorageService } from '../../services/observability/usage-storage';
-import type { McpUsageStorageService } from '../../services/mcp-proxy/mcp-usage-storage';
 
 export async function registerBackupRoutes(
   fastify: FastifyInstance,
-  usageStorage?: UsageStorageService,
-  mcpUsageStorage?: McpUsageStorageService
+  usageStorage?: UsageStorageService
 ) {
   const backupService = new BackupService();
 
@@ -118,17 +116,11 @@ export async function registerBackupRoutes(
         usageStorage.deleteAllDebugLogs(),
       ]);
 
-      let successMcp = true;
-      if (mcpUsageStorage) {
-        successMcp = await mcpUsageStorage.deleteAllLogs();
-      }
-
-      if (!successUsage || !successErrors || !successDebug || !successMcp) {
+      if (!successUsage || !successErrors || !successDebug) {
         logger.error('[Backup] Reset logs partial failure:', {
           successUsage,
           successErrors,
           successDebug,
-          successMcp,
         });
         return reply.code(500).send({ error: 'Failed to reset some logs' });
       }

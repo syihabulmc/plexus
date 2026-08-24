@@ -44,7 +44,6 @@ The **Admin UI** (accessible at `http://localhost:4000` after starting) is the e
 - **Keys**: Manage client API keys with optional quota assignment
 - **Quotas**: Define usage limits (tokens, requests, or spending) per time window
 - **Custom Quota Checkers**: Write JavaScript integrations for provider quota APIs
-- **MCP Servers**: Configure MCP proxy endpoints
 - **OAuth**: Login to OAuth-backed providers (Anthropic, GitHub Copilot, Codex, etc.)
 - **Settings**: Vision fallthrough, global defaults, cooldown configuration
 
@@ -955,51 +954,6 @@ Separate from timeout/stall settings, Plexus now also cancels upstream provider 
 
 ---
 
-## MCP Servers
-
-Plexus proxies [Model Context Protocol](https://modelcontextprotocol.io) servers. Only HTTP streaming transport is supported.
-
-### Settings
-
-| Setting | Description | Required |
-|---------|-------------|----------|
-| **Server Name** | Identifier used in URLs | Yes |
-| **Upstream URL** | Full MCP server endpoint | Yes |
-| **Enabled** | Active for routing | No |
-| **Headers** | Static headers forwarded to upstream | No |
-
-### Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/mcp/:name` | JSON-RPC messages |
-| `GET` | `/mcp/:name` | SSE streaming |
-| `DELETE` | `/mcp/:name` | End session |
-
-### Authentication
-
-All MCP endpoints require a Plexus API key. Client auth headers are NOT forwarded — only configured static headers are added.
-
-### OAuth Discovery
-
-Plexus exposes standard OAuth 2.0 endpoints for MCP clients:
-- `GET /.well-known/oauth-authorization-server`
-- `GET /.well-known/oauth-protected-resource/mcp/:name`
-- `GET /oauth/authorize` and `POST /oauth/authorize`
-- `POST /oauth/token`
-- `POST /oauth/register`
-
-The authorization server is shared by all configured MCP servers, while each
-`/mcp/:name` endpoint has its own protected-resource metadata and RFC 8707
-resource identifier (`<issuer>/mcp/:name`).
-
-The browser consent step uses the existing Plexus session. A limited API-key
-session is always bound to that key and cannot select another key. An
-administrator session must explicitly choose the API-key identity to which the
-MCP grant will be bound, even when only one active key exists.
-
----
-
 ## Vision Fallthrough
 
 Vision fallthrough allows image inputs to be preprocessed by a vision-capable model before routing to the actual target.
@@ -1082,7 +1036,6 @@ Plexus can encrypt sensitive data using AES-256-GCM.
 | API Keys | secret |
 | OAuth Credentials | accessToken, refreshToken |
 | Providers | apiKey, headers, quotaCheckerOptions |
-| MCP Servers | headers |
 
 ### Setup
 

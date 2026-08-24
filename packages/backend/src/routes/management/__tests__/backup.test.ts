@@ -47,7 +47,6 @@ import { registerBackupRoutes } from '../backup';
 describe('Backup management routes', () => {
   let fastify: ReturnType<typeof Fastify>;
   let mockUsageStorage: any;
-  let mockMcpUsageStorage: any;
 
   beforeEach(async () => {
     fastify = Fastify();
@@ -56,10 +55,7 @@ describe('Backup management routes', () => {
       deleteAllErrors: vi.fn(async () => true),
       deleteAllDebugLogs: vi.fn(async () => true),
     };
-    mockMcpUsageStorage = {
-      deleteAllLogs: vi.fn(async () => true),
-    };
-    await registerBackupRoutes(fastify, mockUsageStorage, mockMcpUsageStorage);
+    await registerBackupRoutes(fastify, mockUsageStorage);
   });
 
   afterEach(async () => {
@@ -134,7 +130,6 @@ describe('Backup management routes', () => {
       expect(mockUsageStorage.deleteAllUsageLogs).toHaveBeenCalled();
       expect(mockUsageStorage.deleteAllErrors).toHaveBeenCalled();
       expect(mockUsageStorage.deleteAllDebugLogs).toHaveBeenCalled();
-      expect(mockMcpUsageStorage.deleteAllLogs).toHaveBeenCalled();
     });
 
     it('returns 500 if a storage delete operation fails', async () => {

@@ -19,11 +19,6 @@ properties:
     additionalProperties:
       $ref: ./KeyConfig.yaml
     description: Map of API key name to key configuration.
-  mcp_servers:
-    type: object
-    additionalProperties:
-      $ref: ./McpServerConfig.yaml
-    description: Map of MCP server name to server configuration.
   user_quotas:
     type: object
     additionalProperties:

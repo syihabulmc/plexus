@@ -12,7 +12,6 @@ import { Debug } from './pages/Debug';
 import { Errors } from './pages/Errors';
 import { Quotas } from './pages/Quotas';
 import { CustomQuotaCheckers } from './pages/CustomQuotaCheckers';
-import { McpPage } from './pages/Mcp';
 import { Playground } from './pages/Playground';
 import { Login } from './pages/Login';
 import { MyKey } from './pages/MyKey';
@@ -116,14 +115,6 @@ const AppRoutes = () => {
                   element={
                     <ProtectedRoute requireAdmin>
                       <CustomQuotaCheckers />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/mcp"
-                  element={
-                    <ProtectedRoute requireAdmin>
-                      <McpPage />
                     </ProtectedRoute>
                   }
                 />

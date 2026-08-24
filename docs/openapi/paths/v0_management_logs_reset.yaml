@@ -4,7 +4,7 @@ delete:
   summary: Reset all request logs, error logs, and debug trace logs (admin only)
   description: |
     Deletes all request logs (usage), error logs, and debug trace logs.
-    Configuration settings, provider configurations, model aliases, keys, MCP servers,
+    Configuration settings, provider configurations, model aliases, keys,
     and provider cooldowns remain untouched.
 
     **Admin only** — limited principals receive 403.

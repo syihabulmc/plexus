@@ -17,7 +17,7 @@
 
 import { getDatabase, getSchema, getCurrentDialect } from '../../db/client';
 import { ConfigService } from './config-service';
-import { ConfigRepository, McpKeyConfig, OAuthCredentialsData } from '../../db/config-repository';
+import { ConfigRepository, OAuthCredentialsData } from '../../db/config-repository';
 import { logger } from '../../utils/logger';
 import { decrypt, encrypt } from '../../utils/encryption';
 import { parse as parseCsvSync } from 'csv-parse/sync';
@@ -45,8 +45,6 @@ export interface ConfigBackupData {
   models: Record<string, unknown>;
   keys: Record<string, unknown>;
   user_quotas: Record<string, unknown>;
-  mcp_servers: Record<string, unknown>;
-  mcp_keys?: McpKeyConfig[];
   settings: Record<string, unknown>;
   oauth_credentials: Array<{
     provider_type: string;
@@ -234,16 +232,6 @@ const TABLE_META: Record<
     timestampMsCols: ['checkedAt', 'resetsAt', 'createdAt'],
     timestampTextCols: [],
   },
-  mcp_request_usage: {
-    booleanCols: ['isStreamed', 'hasDebug'],
-    timestampMsCols: [],
-    timestampTextCols: ['createdAt'],
-  },
-  mcp_debug_logs: {
-    booleanCols: [],
-    timestampMsCols: [],
-    timestampTextCols: ['createdAt'],
-  },
   responses: {
     booleanCols: [],
     timestampMsCols: [], // createdAt/completedAt are plain integer, not timestamp_ms
@@ -271,8 +259,6 @@ const OPERATIONAL_TABLES = [
   'quota_state',
   'meter_snapshots',
   'quota_snapshots',
-  'mcp_request_usage',
-  'mcp_debug_logs',
   'responses',
   'conversations',
   'response_items',
@@ -317,8 +303,6 @@ export class BackupService {
         models: configData.models as Record<string, unknown>,
         keys: configData.keys as Record<string, unknown>,
         user_quotas: configData.user_quotas as Record<string, unknown>,
-        mcp_servers: configData.mcp_servers as Record<string, unknown>,
-        mcp_keys: configData.mcp_keys as McpKeyConfig[],
         settings: configData.settings as Record<string, unknown>,
         oauth_credentials: oauthCredentials,
       },
@@ -437,18 +421,6 @@ export class BackupService {
       await repo.saveUserQuota(name, config);
     }
     counts['user_quotas'] = Object.keys(userQuotas).length;
-
-    // MCP servers
-    const mcpServers = data.data.mcp_servers as Record<string, any>;
-    for (const [name, config] of Object.entries(mcpServers)) {
-      await repo.saveMcpServer(name, config);
-    }
-    counts['mcp_servers'] = Object.keys(mcpServers).length;
-
-    // MCP keys reference MCP servers, so restore them only after all servers exist.
-    const mcpKeys = data.data.mcp_keys ?? [];
-    await repo.batchInsertMcpKeys(mcpKeys);
-    counts['mcp_keys'] = mcpKeys.length;
 
     // System settings
     const settings = data.data.settings as Record<string, unknown>;
@@ -671,8 +643,6 @@ export class BackupService {
       quota_state: schema.quotaState,
       meter_snapshots: schema.meterSnapshots,
       quota_snapshots: schema.quotaSnapshots,
-      mcp_request_usage: schema.mcpRequestUsage,
-      mcp_debug_logs: schema.mcpDebugLogs,
       responses: schema.responses,
       conversations: schema.conversations ?? null,
       response_items: schema.responseItems ?? null,

@@ -7,7 +7,6 @@ import type {
   ModelConfig,
   KeyConfig,
   QuotaDefinition,
-  McpServerConfig,
   FailoverPolicy,
   CooldownPolicy,
   QuotaConfig,
@@ -297,20 +296,6 @@ export class ConfigService {
     this.rebuildCache();
   }
 
-  // ─── MCP Server CRUD ─────────────────────────────────────────────
-
-  async saveMcpServer(name: string, config: McpServerConfig): Promise<void> {
-    await this.repo.saveMcpServer(name, config);
-    this.pendingWrites++;
-    this.rebuildCache();
-  }
-
-  async deleteMcpServer(name: string): Promise<void> {
-    await this.repo.deleteMcpServer(name);
-    this.pendingWrites++;
-    this.rebuildCache();
-  }
-
   // ─── Settings ─────────────────────────────────────────────────────
 
   async setSetting(key: string, value: unknown): Promise<void> {
@@ -397,8 +382,6 @@ export class ConfigService {
     const models = await this.repo.getAllAliases();
     const keys = await this.repo.getAllKeys();
     const userQuotas = await this.repo.getAllUserQuotas();
-    const mcpServers = await this.repo.getAllMcpServers();
-    const mcpKeys = await this.repo.getAllMcpKeys();
     const settings = await this.repo.getAllSettings();
     const oauthProviders = await this.repo.getAllOAuthProviders();
 
@@ -407,8 +390,6 @@ export class ConfigService {
       models,
       keys,
       user_quotas: userQuotas,
-      mcp_servers: mcpServers,
-      mcp_keys: mcpKeys,
       settings,
       oauth_providers: oauthProviders,
     };
@@ -496,11 +477,9 @@ export class ConfigService {
     assertNoAliasRefCycles(models);
     const keys = await this.repo.getAllKeys();
     const userQuotas = await this.repo.getAllUserQuotas();
-    const mcpServers = await this.repo.getAllMcpServers();
     const failover = await this.repo.getFailoverPolicy();
     const cooldown = await this.repo.getCooldownPolicy();
     const backgroundExploration = await this.repo.getBackgroundExplorationConfig();
-    const mcpOAuth = await this.repo.getMcpOAuthConfig();
     const timeout = await this.repo.getTimeoutConfig();
     const stall = await this.repo.getStallConfig();
     const allSettings = await this.repo.getAllSettings();
@@ -524,10 +503,7 @@ export class ConfigService {
       timeout,
       stall: Object.values(stall).some((v) => v !== null && v !== undefined) ? stall : undefined,
       backgroundExploration,
-      mcpOAuth,
       quotas,
-      mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
-      mcp_servers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
       user_quotas: Object.keys(userQuotas).length > 0 ? userQuotas : undefined,
     };
 

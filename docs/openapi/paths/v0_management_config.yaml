@@ -19,7 +19,6 @@ get:
     - `providers` — All configured provider configs
     - `models` — All model alias configs
     - `keys` — All API key configs
-    - `mcp_servers` — All MCP server configs
     - `user_quotas` — All user quota definitions
     - `quotas` — Provider quota checker configs
     - `system_settings` — Global system settings

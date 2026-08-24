@@ -36,14 +36,6 @@ info:
        HTTP traffic without model routing or payload transformation. Requires
        explicit provider and inference-key opt-in.
 
-
-    4. **MCP Proxy** (`/mcp/:name`) — Proxies JSON-RPC and SSE traffic to
-       database-registered MCP servers. Plus unauthenticated MCP OAuth
-       discovery, authorization, token, and dynamic client-registration
-       endpoints when `mcpOAuth.enabled` is true. Each MCP server has its own
-       RFC 9728 protected-resource metadata and resource identifier.
-
-
     ## Authentication
 
 
@@ -151,10 +143,6 @@ info:
     - `GET /v1/openrouter/models`
     - `GET /v1/metadata/search`
     - `GET /v1/metadata/lookup`
-    - OAuth authorization-server metadata and MCP protected-resource metadata
-      when MCP OAuth is enabled
-    - MCP OAuth authorization, token, and dynamic client-registration endpoints
-      when MCP OAuth is enabled
   license:
     name: MIT
     identifier: MIT
@@ -204,7 +192,7 @@ tags:
   - name: Management — Auth
     description: Admin-key verification and self-service identity.
   - name: Management — Config
-    description: Providers, aliases, keys, system settings, MCP servers.
+    description: Providers, aliases, keys, and system settings.
   - name: Management — Usage
     description: >-
       Request-level usage records and time-series aggregates.
@@ -222,8 +210,6 @@ tags:
     description: In-memory debug capture targets and stored debug trace logs.
   - name: Management — Errors
     description: Inference error log storage.
-  - name: Management — MCP Logs
-    description: Usage records for the MCP proxy.
   - name: Management — Cooldowns
     description: Provider/model cooldown state.
   - name: Management — Performance
@@ -307,7 +293,7 @@ tags:
       Two backup modes are available:
 
       - **Config-only** (default): Exports providers, model aliases, API keys,
-        user quotas, MCP servers, system settings, and OAuth credentials as a
+        user quotas, system settings, and OAuth credentials as a
         JSON envelope. Small and fast — covers most migration and cloning needs.
       - **Full backup** (`?full=true`): Exports configuration plus all
         operational/telemetry data (usage records, debug logs, errors, cooldowns,
@@ -320,36 +306,6 @@ tags:
     description: External model metadata helpers (HuggingFace).
   - name: Events
     description: Server-Sent Event streams.
-  - name: MCP Proxy
-    description: >-
-      JSON-RPC/SSE proxy for configured MCP servers plus OAuth discovery.
-
-      ### Header forwarding rules
-
-      - Client `Authorization` header is **stripped** — not forwarded to
-        upstream servers.
-      - Client `x-api-key` header is **stripped** — not forwarded.
-      - Static `headers` from the server's config are forwarded to the
-        upstream.
-
-      ### Redaction
-
-      Sensitive headers are removed from requests flowing through the
-      proxy. Only configured static headers from `mcp_servers` are used.
-
-      ### Session semantics
-
-      Each proxy connection maintains a session with the upstream MCP
-      server. Sessions are per-connection and terminate when the client
-      disconnects or `DELETE` is called.
-
-      ### OAuth discovery endpoints
-
-      The OAuth discovery, authorization, token, and dynamic
-      client-registration endpoints expose the MCP OAuth flow when enabled.
-      Each `/mcp/:name` server has a route-specific protected-resource
-      metadata document and resource identifier. OAuth endpoints return `404`
-      with `oauth_disabled` when `mcpOAuth.enabled` is false.
 security:
   - PlexusApiKey: []
 paths:
@@ -431,8 +387,6 @@ paths:
     $ref: paths/v0_management_config_trusted-proxies.yaml
   /v0/management/config/compaction:
     $ref: paths/v0_management_config_compaction.yaml
-  /v0/management/config/mcp-enabled:
-    $ref: paths/v0_management_config_mcp-enabled.yaml
   /v0/management/system-settings:
     $ref: paths/v0_management_system-settings.yaml
   /v0/management/providers:
@@ -465,26 +419,6 @@ paths:
     $ref: paths/v0_management_keys_{name}.yaml
   /v0/management/keys/{name}/disable:
     $ref: paths/v0_management_keys_{name}_disable.yaml
-  /v0/management/mcp-servers:
-    $ref: paths/v0_management_mcp-servers.yaml
-  /v0/management/mcp-servers/{serverName}:
-    $ref: paths/v0_management_mcp-servers_{serverName}.yaml
-  /v0/management/mcp-servers/{serverName}/status:
-    $ref: paths/v0_management_mcp-servers_{serverName}_status.yaml
-  /v0/management/mcp-servers/{serverName}/start:
-    $ref: paths/v0_management_mcp-servers_{serverName}_start.yaml
-  /v0/management/mcp-servers/{serverName}/stop:
-    $ref: paths/v0_management_mcp-servers_{serverName}_stop.yaml
-  /v0/management/mcp-servers/{serverName}/restart:
-    $ref: paths/v0_management_mcp-servers_{serverName}_restart.yaml
-  /v0/management/mcp-servers/{serverName}/process-logs:
-    $ref: paths/v0_management_mcp-servers_{serverName}_process-logs.yaml
-  /v0/management/mcp-servers/{serverName}/keys:
-    $ref: paths/v0_management_mcp-servers_{serverName}_keys.yaml
-  /v0/management/mcp-servers/{serverName}/keys/{keyId}:
-    $ref: paths/v0_management_mcp-servers_{serverName}_keys_{keyId}.yaml
-  /v0/management/mcp-servers/{serverName}/keys/{keyId}/clear-cooldown:
-    $ref: paths/v0_management_mcp-servers_{serverName}_keys_{keyId}_clear-cooldown.yaml
   /v0/management/quota-checker-types:
     $ref: paths/v0_management_quota-checker-types.yaml
   /v0/management/quota-checkers:
@@ -511,10 +445,6 @@ paths:
     $ref: paths/v0_management_errors.yaml
   /v0/management/errors/{requestId}:
     $ref: paths/v0_management_errors_{requestId}.yaml
-  /v0/management/mcp-logs:
-    $ref: paths/v0_management_mcp-logs.yaml
-  /v0/management/mcp-logs/{requestId}:
-    $ref: paths/v0_management_mcp-logs_{requestId}.yaml
   /v0/management/cooldowns:
     $ref: paths/v0_management_cooldowns.yaml
   /v0/management/cooldowns/{provider}:
@@ -579,20 +509,6 @@ paths:
     $ref: paths/v0_system_logs_stream.yaml
   /v0/system/logs/recent:
     $ref: paths/v0_system_logs_recent.yaml
-  /mcp/{name}:
-    $ref: paths/mcp_{name}.yaml
-  /mcp/plexus:
-    $ref: paths/mcp_plexus.yaml
-  /.well-known/oauth-authorization-server:
-    $ref: paths/.well-known_oauth-authorization-server.yaml
-  /.well-known/oauth-protected-resource/mcp/{name}:
-    $ref: paths/.well-known_oauth-protected-resource.yaml
-  /oauth/authorize:
-    $ref: paths/oauth_authorize.yaml
-  /oauth/token:
-    $ref: paths/oauth_token.yaml
-  /oauth/register:
-    $ref: paths/oauth_register.yaml
   /v1/completions:
     $ref: paths/v1_completions.yaml
   /completions:

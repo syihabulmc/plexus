@@ -15,17 +15,14 @@ import type {
   ModelConfig,
   KeyConfig,
   QuotaDefinition,
-  McpServerConfig,
   FailoverPolicy,
   CooldownPolicy,
   BackgroundExplorationConfig,
   TimeoutConfig,
   StallConfigType,
-  McpOAuthConfig,
   MetadataOverrides,
 } from '../config';
 import { resolveGpuParams } from '@plexus/shared';
-import { McpOauthRepository } from './mcp-oauth-repository';
 
 export interface CustomCheckerRecord {
   id: string;
@@ -260,12 +257,6 @@ export interface OAuthCredentialsData {
   expiresAt: number; // epoch seconds
 }
 
-export interface McpKeyConfig {
-  serverName: string;
-  key: string;
-  isActive: boolean;
-}
-
 export class ConfigRepository {
   private db() {
     return getDatabase();
@@ -353,8 +344,6 @@ export class ConfigRepository {
     await this.db().delete(schema.customCheckers);
     await this.db().delete(schema.apiKeys);
     await this.db().delete(schema.userQuotaDefinitions);
-    await this.db().delete(schema.mcpKeys);
-    await this.db().delete(schema.mcpServers);
     await this.db().delete(schema.oauthCredentials);
     await this.db().delete(schema.systemSettings);
   }
@@ -1325,12 +1314,6 @@ export class ConfigRepository {
     };
 
     if (existing.length > 0) {
-      const existingSecretHash =
-        existing[0]!.secretHash ?? hashSecret(decrypt(existing[0]!.secret));
-      if (existingSecretHash && existingSecretHash !== secretHash) {
-        await new McpOauthRepository().revokeTokensForKeyName(name);
-      }
-
       await this.db().update(schema.apiKeys).set(keyData).where(eq(schema.apiKeys.name, name));
     } else {
       await this.db()
@@ -1341,7 +1324,6 @@ export class ConfigRepository {
 
   async deleteKey(name: string): Promise<void> {
     const schema = this.schema();
-    await new McpOauthRepository().revokeTokensForKeyName(name);
     await this.db().delete(schema.apiKeys).where(eq(schema.apiKeys.name, name));
   }
 
@@ -1429,256 +1411,6 @@ export class ConfigRepository {
     await this.db()
       .delete(schema.userQuotaDefinitions)
       .where(eq(schema.userQuotaDefinitions.name, name));
-  }
-
-  // ─── MCP Servers ─────────────────────────────────────────────────
-
-  async getAllMcpServers(): Promise<Record<string, McpServerConfig>> {
-    const schema = this.schema();
-    const rows = await this.db().select().from(schema.mcpServers);
-    const result: Record<string, McpServerConfig> = {};
-
-    for (const row of rows) {
-      const mode = row.mode || 'remote_http';
-
-      if (mode === 'local_http') {
-        const localConfig: McpServerConfig = {
-          mode: 'local_http',
-          enabled: toBool(row.enabled),
-          launcher: row.launcher as 'bunx' | 'uvx',
-          package: row.packageName || '',
-          args: row.args ? decryptJsonField<string[]>(row.args) || [] : [],
-          env: row.env ? decryptJsonField<Record<string, string>>(row.env) || undefined : undefined,
-          port: Number(row.port || 0),
-          path: row.path || '/mcp',
-          startup_timeout_ms: Number(row.startupTimeoutMs || 30000),
-          headers: row.headers
-            ? decryptJsonField<Record<string, string>>(row.headers) || undefined
-            : undefined,
-          auth_scheme: row.authScheme,
-          rate_limit_cooldown_ms: Number(row.rateLimitCooldownMs),
-          quota_cooldown_ms: Number(row.quotaCooldownMs),
-        };
-        result[row.name] = localConfig;
-        continue;
-      }
-
-      result[row.name] = {
-        upstream_url: row.upstreamUrl,
-        enabled: toBool(row.enabled),
-        ...(row.headers
-          ? { headers: decryptJsonField<Record<string, string>>(row.headers) ?? undefined }
-          : {}),
-        auth_scheme: row.authScheme,
-        rate_limit_cooldown_ms: Number(row.rateLimitCooldownMs),
-        quota_cooldown_ms: Number(row.quotaCooldownMs),
-      };
-    }
-
-    return result;
-  }
-
-  async saveMcpServer(name: string, config: McpServerConfig): Promise<void> {
-    const schema = this.schema();
-    const timestamp = now();
-
-    const existing = await this.db()
-      .select()
-      .from(schema.mcpServers)
-      .where(eq(schema.mcpServers.name, name))
-      .limit(1);
-
-    const isLocal = config.mode === 'local_http';
-    const upstreamUrl = isLocal
-      ? 'http://127.0.0.1:' + config.port + (config.path || '/mcp')
-      : config.upstream_url;
-    const localFields = isLocal
-      ? {
-          mode: 'local_http',
-          launcher: config.launcher,
-          packageName: config.package,
-          args: config.args ? encryptJsonField(config.args) : null,
-          env: config.env ? encryptJsonField(config.env) : null,
-          port: config.port,
-          path: config.path || '/mcp',
-          startupTimeoutMs: config.startup_timeout_ms || 30000,
-        }
-      : {
-          mode: 'remote_http',
-          launcher: null,
-          packageName: null,
-          args: null,
-          env: null,
-          port: null,
-          path: null,
-          startupTimeoutMs: null,
-        };
-
-    if (existing.length > 0) {
-      await this.db()
-        .update(schema.mcpServers)
-        .set({
-          upstreamUrl,
-          enabled: fromBool(config.enabled !== false),
-          headers: config.headers ? encryptJsonField(config.headers) : null,
-          authScheme: config.auth_scheme ?? null,
-          rateLimitCooldownMs: config.rate_limit_cooldown_ms ?? 60000,
-          quotaCooldownMs: config.quota_cooldown_ms ?? 86400000,
-          ...localFields,
-          updatedAt: timestamp,
-        })
-        .where(eq(schema.mcpServers.name, name));
-    } else {
-      await this.db()
-        .insert(schema.mcpServers)
-        .values({
-          name,
-          upstreamUrl,
-          enabled: fromBool(config.enabled !== false),
-          headers: config.headers ? encryptJsonField(config.headers) : null,
-          authScheme: config.auth_scheme ?? null,
-          rateLimitCooldownMs: config.rate_limit_cooldown_ms ?? 60000,
-          quotaCooldownMs: config.quota_cooldown_ms ?? 86400000,
-          ...localFields,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        });
-    }
-  }
-
-  async deleteMcpServer(name: string): Promise<void> {
-    const schema = this.schema();
-    await this.db().delete(schema.mcpServers).where(eq(schema.mcpServers.name, name));
-  }
-
-  async getMcpServerKeys(name: string) {
-    const schema = this.schema();
-    const [server] = await this.db()
-      .select({ id: schema.mcpServers.id })
-      .from(schema.mcpServers)
-      .where(eq(schema.mcpServers.name, name))
-      .limit(1);
-    if (!server) return null;
-
-    return this.db()
-      .select({
-        id: schema.mcpKeys.id,
-        key: schema.mcpKeys.key,
-        isActive: schema.mcpKeys.isActive,
-        cooldownUntil: schema.mcpKeys.cooldownUntil,
-      })
-      .from(schema.mcpKeys)
-      .where(eq(schema.mcpKeys.mcpServerId, server.id));
-  }
-
-  async getAllMcpKeys(): Promise<McpKeyConfig[]> {
-    const schema = this.schema();
-    const rows = await this.db()
-      .select({
-        serverName: schema.mcpServers.name,
-        key: schema.mcpKeys.key,
-        isActive: schema.mcpKeys.isActive,
-      })
-      .from(schema.mcpKeys)
-      .innerJoin(schema.mcpServers, eq(schema.mcpKeys.mcpServerId, schema.mcpServers.id));
-
-    return rows.map((row: { serverName: string; key: string; isActive: boolean | number }) => ({
-      ...row,
-      key: decryptField(row.key) as string,
-      isActive: toBool(row.isActive),
-    }));
-  }
-
-  async batchInsertMcpKeys(keys: McpKeyConfig[]): Promise<void> {
-    if (keys.length === 0) return;
-
-    const schema = this.schema();
-    const servers = await this.db()
-      .select({ id: schema.mcpServers.id, name: schema.mcpServers.name })
-      .from(schema.mcpServers);
-    const serverIds = new Map(
-      servers.map((server: { name: string; id: number }) => [server.name, server.id])
-    );
-    const timestamp = new Date();
-
-    await this.db()
-      .insert(schema.mcpKeys)
-      .values(
-        keys.map((key) => {
-          const mcpServerId = serverIds.get(key.serverName);
-          if (mcpServerId === undefined) {
-            throw new Error(`Cannot restore MCP key for unknown server: ${key.serverName}`);
-          }
-          return {
-            mcpServerId,
-            key: encryptField(key.key) as string,
-            isActive: fromBool(key.isActive),
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          };
-        })
-      );
-  }
-
-  async addMcpServerKey(name: string, key: string, isActive: boolean) {
-    const schema = this.schema();
-    const [server] = await this.db()
-      .select({ id: schema.mcpServers.id })
-      .from(schema.mcpServers)
-      .where(eq(schema.mcpServers.name, name))
-      .limit(1);
-    if (!server) return null;
-
-    const timestamp = new Date();
-    const [created] = await this.db()
-      .insert(schema.mcpKeys)
-      .values({
-        mcpServerId: server.id,
-        key: encryptField(key) as string,
-        isActive: fromBool(isActive),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      })
-      .returning({
-        id: schema.mcpKeys.id,
-        key: schema.mcpKeys.key,
-        isActive: schema.mcpKeys.isActive,
-        cooldownUntil: schema.mcpKeys.cooldownUntil,
-      });
-    return created!;
-  }
-
-  async deleteMcpServerKey(name: string, keyId: number): Promise<boolean> {
-    const schema = this.schema();
-    const [server] = await this.db()
-      .select({ id: schema.mcpServers.id })
-      .from(schema.mcpServers)
-      .where(eq(schema.mcpServers.name, name))
-      .limit(1);
-    if (!server) return false;
-
-    const deleted = await this.db()
-      .delete(schema.mcpKeys)
-      .where(and(eq(schema.mcpKeys.id, keyId), eq(schema.mcpKeys.mcpServerId, server.id)))
-      .returning({ id: schema.mcpKeys.id });
-    return deleted.length > 0;
-  }
-
-  async clearMcpServerKeyCooldown(name: string, keyId: number): Promise<boolean> {
-    const schema = this.schema();
-    const [server] = await this.db()
-      .select({ id: schema.mcpServers.id })
-      .from(schema.mcpServers)
-      .where(eq(schema.mcpServers.name, name))
-      .limit(1);
-    if (!server) return false;
-
-    const updated = await this.db()
-      .update(schema.mcpKeys)
-      .set({ cooldownUntil: null, updatedAt: new Date() })
-      .where(and(eq(schema.mcpKeys.id, keyId), eq(schema.mcpKeys.mcpServerId, server.id)))
-      .returning({ id: schema.mcpKeys.id });
-    return updated.length > 0;
   }
 
   // ─── System Settings ─────────────────────────────────────────────
@@ -1822,19 +1554,6 @@ export class ConfigRepository {
       2
     );
     return { enabled, stalenessThresholdSeconds, workerConcurrency };
-  }
-
-  async getMcpOAuthConfig(): Promise<McpOAuthConfig> {
-    const stored = await this.getSetting<Partial<McpOAuthConfig>>('mcpOAuth', {});
-    const enabled = stored?.enabled === true;
-    const provider = stored?.provider === 'plexus-idp' ? stored.provider : 'plexus-idp';
-    return {
-      enabled,
-      provider,
-      ...(typeof stored?.issuer === 'string' && stored.issuer.trim()
-        ? { issuer: stored.issuer.trim() }
-        : {}),
-    };
   }
 
   async getTimeoutConfig(): Promise<TimeoutConfig> {

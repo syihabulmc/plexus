@@ -1,30 +1,15 @@
 ---
 name: plexus-rest-api
 description: >-
-  Fallback for inspecting or administering a running Plexus instance with raw
-  REST API calls when plexus-cli is unavailable or cannot support a required
-  operation. Covers the full management surface, including SSE streaming.
+  Inspects or administers a running Plexus instance with raw REST API calls.
+  Covers the full management surface, including SSE streaming.
 ---
 
 # Plexus REST API
 
-Use raw `curl` and `jq` management API calls only as a fallback. Do not assume
+Use raw `curl` and `jq` management API calls. Do not assume
 local filesystem access to the Plexus data store when a management endpoint
 exists.
-
-## CLI Preference
-
-**Strongly prefer the `plexus-cli` skill.** Before using any REST command,
-check whether either CLI invocation is available:
-
-```bash
-bun run plexuscli --help >/dev/null 2>&1 || command -v plexuscli >/dev/null 2>&1
-```
-
-If that succeeds, load and use `plexus-cli` instead of this skill. The CLI
-discovers the server's OpenAPI contract and provides safer operation handling.
-Use this REST fallback only when neither CLI invocation is available, or when
-the CLI deliberately excludes the required operation, such as SSE streaming.
 
 ## First Steps
 
@@ -214,14 +199,6 @@ curl -fsS "$PLEXUS_STAGING_URL/v0/management/debug/logs/$REQUEST_ID" \
 - Delete: `DELETE /v0/management/user-quotas/{name}`. A 409 means a key still references the quota; remove the key assignment first.
 - Assign a quota to a key by updating the key config with `quota: "quota_name"`.
 - If `GET /v0/management/quota/status/{key}` returns 404 but `GET /v0/management/keys` shows the key exists, report an API/runtime consistency issue instead of assuming the key is missing.
-
-### Manage MCP Gateway
-
-- List servers: `GET /v0/management/mcp-servers`.
-- Create or replace server: `PUT /v0/management/mcp-servers/{serverName}` with `upstream_url`, `enabled`, and optional `headers`.
-- Delete server: `DELETE /v0/management/mcp-servers/{serverName}`.
-- Review MCP proxy traffic: `GET /v0/management/mcp-logs?limit=20`, optionally `serverName=...` or `apiKey=...`.
-- Delete MCP logs only when explicitly requested: `DELETE /v0/management/mcp-logs?olderThanDays=N` or `DELETE /v0/management/mcp-logs/{requestId}`.
 
 ### Manage General Settings
 

@@ -13,8 +13,7 @@ get:
     Returns a single API key record by name.
 
     The stored secret is returned decrypted by the HTTP management API.
-    Clients that need redaction should apply it themselves or use the MCP
-    management surface instead.
+    Clients that need redaction should apply it themselves.
 
     **Admin only** — limited principals receive 403.
   security:

@@ -28,7 +28,6 @@ properties:
       - models
       - keys
       - user_quotas
-      - mcp_servers
       - settings
       - oauth_credentials
     properties:
@@ -48,10 +47,6 @@ properties:
         type: object
         additionalProperties: true
         description: Map of quota name to quota definition.
-      mcp_servers:
-        type: object
-        additionalProperties: true
-        description: Map of MCP server name to server configuration.
       settings:
         type: object
         additionalProperties: true

@@ -53,17 +53,13 @@ import { requestLogger } from './middleware/log';
 import { registerManagementRoutes } from './routes/management';
 import { registerInferenceRoutes } from './routes/inference';
 import { registerRawPassthroughRoutes } from './routes/raw-passthrough';
-import { registerMcpRoutes } from './routes/mcp';
 import { registerOpenApiRoute } from './routes/openapi';
-import { McpUsageStorageService } from './services/mcp-proxy/mcp-usage-storage';
 import { QuotaEnforcer } from './services/quota/quota-enforcer';
 import { initModelCatalog } from './services/pi-ai/catalog';
 import { initializeDatabase } from './db/client';
 import { runMigrations } from './db/migrate';
 import { runEncryptionMigration } from './db/encrypt-migration';
-import { runMcpKeyMigration } from './db/mcp-key-migration';
 import { isEncryptionEnabled } from './utils/encryption';
-import { mcpProcessManager } from './services/mcp-local/mcp-process-manager';
 
 registerBunOAuthFlows();
 
@@ -137,7 +133,6 @@ fastify.register(multipart, {
 
 const dispatcher = new Dispatcher();
 const usageStorage = new UsageStorageService();
-const mcpUsageStorage = new McpUsageStorageService();
 const quotaScheduler = QuotaScheduler.getInstance();
 
 // Initialize singletons with storage dependencies
@@ -165,7 +160,6 @@ try {
   initializeDatabase();
   await runMigrations();
   await runEncryptionMigration();
-  await runMcpKeyMigration();
 } catch (e) {
   logger.error('Failed to initialize database or run migrations', e);
   process.exit(1);
@@ -313,9 +307,6 @@ await registerInferenceRoutes(fastify, dispatcher, usageStorage, quotaEnforcer);
 // --- Raw Provider Proxy ---
 await registerRawPassthroughRoutes(fastify, usageStorage, quotaEnforcer);
 
-// --- Routes: MCP Proxy ---
-await registerMcpRoutes(fastify, mcpUsageStorage);
-
 // Public discovery document for API clients.
 await registerOpenApiRoute(fastify);
 
@@ -331,7 +322,6 @@ await registerManagementRoutes(
   dispatcher,
   probeService,
   quotaScheduler,
-  mcpUsageStorage,
   quotaEnforcer
 );
 
@@ -453,7 +443,6 @@ const start = async () => {
     const shutdown = async (signal: string) => {
       logger.info(`Received ${signal}, shutting down gracefully...`);
       quotaScheduler.stop();
-      await mcpProcessManager.stopAll();
       await fastify.close();
       const { closeDatabase } = await import('./db/client');
       await closeDatabase();

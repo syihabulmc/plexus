@@ -20,7 +20,7 @@ This file is a **guardrail**, not general documentation.
 - **NEVER** use `--no-verify` or `LEFTHOOK=0` without user permission.
 - **NEVER** edit or manually create migration files.
 - **NEVER** produce implementation or summary documents unless specifically requested.
-- **DEBUGGING** Plexus instances: read and use the `plexus-cli` skill. The worktree `.env` contains the relevant staging configuration. When the user specifies `staging`, use `PLEXUS_STAGING_URL` for the staging URL and `PLEXUS_ADMIN_KEY` for the admin key.
+- **DEBUGGING** Plexus instances: read and use the `plexus-rest-api` skill. The worktree `.env` contains the relevant staging configuration. When the user specifies `staging`, use `PLEXUS_STAGING_URL` for the staging URL and `PLEXUS_ADMIN_KEY` for the admin key.
 - **AVOID** searching library type definitions for documentation. Use context/search skills first when available.
 - **ASK** when requirements are ambiguous.
 - **USE** agents / subtasks aggressively where tools allow for improved cost and performance.

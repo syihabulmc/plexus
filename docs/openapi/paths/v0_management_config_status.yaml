@@ -24,9 +24,7 @@ get:
                 type: integer
               quotaCount:
                 type: integer
-              mcpServerCount:
-                type: integer
-            required: [providerCount, modelAliasCount, keyCount, quotaCount, mcpServerCount]
+            required: [providerCount, modelAliasCount, keyCount, quotaCount]
     '401':
       description: Authentication required or invalid credentials.
   operationId: getV0ManagementConfigStatus
