@@ -80,8 +80,8 @@ properties:
       - string
       - 'null'
     description: >
-      Resolved canonical model name. For aliases with `model_architecture`,
-      this is the target; otherwise same as `incomingModelAlias`.
+      Resolved canonical model name (same as `incomingModelAlias` when no
+      rename applies).
   selectedModelName:
     type:
       - string
@@ -231,14 +231,6 @@ properties:
       Output tokens per second (throughput). Calculated as
       `tokensOutput / (durationMs - ttftMs)` for streaming requests.
       Null for non-streaming or if calculation invalid.
-  kwhUsed:
-    type:
-      - number
-      - 'null'
-    description: >
-      Estimated energy consumption in kilowatt-hours. Calculated from
-      `model_architecture` token estimates and provider-specific energy
-      coefficients. Requires `model_architecture` to be set on the alias.
   isStreamed:
     type: boolean
     description: Whether the response was streamed (SSE).

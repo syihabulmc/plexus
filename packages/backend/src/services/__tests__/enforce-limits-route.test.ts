@@ -109,16 +109,18 @@ describe('enforceContextLimitForRoute', () => {
   });
 
   // Case 4: enforce_limits true + over-window → throws ContextLengthExceededError with statusCode 400
-  test('throws ContextLengthExceededError when context exceeds route.modelArchitecture.context_length', () => {
-    // Tiny window: OVER_WINDOW_SIZE tokens. No alias metadata → resolveContextLength returns undefined,
-    // so the route.modelArchitecture.context_length is used as the contextLength.
+  test('throws ContextLengthExceededError when context exceeds the resolved context length', () => {
+    // Tiny window via custom metadata: OVER_WINDOW_SIZE tokens. resolveContextLength
+    // reads context_length from the alias metadata.
     const context = overWindowContext();
-    const route: EnforceRouteInfo = {
-      canonicalModel: 'test-model',
-      modelArchitecture: { context_length: OVER_WINDOW_SIZE },
-    };
-    // No metadata on aliasConfig → resolveContextLength returns undefined → falls through to route architecture
-    const config = aliasConfig({ enforce_limits: true });
+    const route: EnforceRouteInfo = { canonicalModel: 'test-model' };
+    const config = aliasConfig({
+      enforce_limits: true,
+      metadata: {
+        source: 'custom',
+        overrides: { name: 'test-model', context_length: OVER_WINDOW_SIZE },
+      },
+    });
 
     expect(() => enforceContextLimitForRoute(context, route, config, undefined, 'chat')).toThrow(
       ContextLengthExceededError
@@ -127,11 +129,14 @@ describe('enforceContextLimitForRoute', () => {
 
   test('thrown ContextLengthExceededError has routingContext.statusCode === 400', () => {
     const context = overWindowContext();
-    const route: EnforceRouteInfo = {
-      canonicalModel: 'test-model',
-      modelArchitecture: { context_length: OVER_WINDOW_SIZE },
-    };
-    const config = aliasConfig({ enforce_limits: true });
+    const route: EnforceRouteInfo = { canonicalModel: 'test-model' };
+    const config = aliasConfig({
+      enforce_limits: true,
+      metadata: {
+        source: 'custom',
+        overrides: { name: 'test-model', context_length: OVER_WINDOW_SIZE },
+      },
+    });
 
     let caught: unknown;
     try {
@@ -151,11 +156,14 @@ describe('enforceContextLimitForRoute', () => {
   test('does not throw when context is under the window', () => {
     const contextWindowSize = 50_000;
     const context = makeContext('Short prompt');
-    const route: EnforceRouteInfo = {
-      canonicalModel: 'test-model',
-      modelArchitecture: { context_length: contextWindowSize },
-    };
-    const config = aliasConfig({ enforce_limits: true });
+    const route: EnforceRouteInfo = { canonicalModel: 'test-model' };
+    const config = aliasConfig({
+      enforce_limits: true,
+      metadata: {
+        source: 'custom',
+        overrides: { name: 'test-model', context_length: contextWindowSize },
+      },
+    });
 
     expect(() =>
       enforceContextLimitForRoute(context, route, config, undefined, 'chat')

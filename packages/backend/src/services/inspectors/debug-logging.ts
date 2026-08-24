@@ -183,30 +183,6 @@ export class DebugLoggingInspector extends BaseInspector {
     return lastCost;
   }
 
-  /**
-   * Extract provider-reported energy from SSE comment lines (e.g., neuralwatt).
-   * Providers emit `: energy {"energy_kwh": ...}` as SSE comments
-   * alongside the standard `data:` events. These contain actual energy usage.
-   */
-  private extractProviderEnergyFromSSEComments(fullBody: string): any | null {
-    const lines = fullBody.split(/\r?\n/);
-    let lastEnergy: any = null;
-
-    for (const line of lines) {
-      // Match `: energy {json}` pattern (SSE comment with energy data)
-      const energyMatch = line.match(/^:\s*energy\s+(\{.+\})\s*$/);
-      if (energyMatch) {
-        try {
-          lastEnergy = JSON.parse(energyMatch[1]!);
-        } catch (e) {
-          // Skip malformed energy lines
-        }
-      }
-    }
-
-    return lastEnergy;
-  }
-
   private reconstructChatCompletions(fullBody: string): any {
     const trimmed = fullBody.trim();
     if (!trimmed) return null;
@@ -229,9 +205,8 @@ export class DebugLoggingInspector extends BaseInspector {
     const lines = fullBody.split(/\r?\n/);
     let snapshot: any = null;
 
-    // Extract provider-reported cost and energy from SSE comment lines
+    // Extract provider-reported cost from SSE comment lines
     const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-    const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
 
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
@@ -251,11 +226,6 @@ export class DebugLoggingInspector extends BaseInspector {
       snapshot.providerReportedCost = providerCost;
     }
 
-    // Attach provider-reported energy if found in SSE comments
-    if (providerEnergy && snapshot) {
-      snapshot.providerReportedEnergy = providerEnergy;
-    }
-
     return snapshot;
   }
 
@@ -268,12 +238,8 @@ export class DebugLoggingInspector extends BaseInspector {
       try {
         const parsed = JSON.parse(trimmed);
         const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-        const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
         if (providerCost) {
           parsed.providerReportedCost = providerCost;
-        }
-        if (providerEnergy) {
-          parsed.providerReportedEnergy = providerEnergy;
         }
         return parsed;
       } catch (e) {
@@ -284,9 +250,8 @@ export class DebugLoggingInspector extends BaseInspector {
     const lines = fullBody.split(/\r?\n/);
     let snapshot: any = null;
 
-    // Extract provider-reported cost and energy from SSE comment lines
+    // Extract provider-reported cost from SSE comment lines
     const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-    const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
 
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
@@ -305,10 +270,6 @@ export class DebugLoggingInspector extends BaseInspector {
       snapshot.providerReportedCost = providerCost;
     }
 
-    if (providerEnergy && snapshot) {
-      snapshot.providerReportedEnergy = providerEnergy;
-    }
-
     return snapshot;
   }
 
@@ -321,12 +282,8 @@ export class DebugLoggingInspector extends BaseInspector {
       try {
         const parsed = JSON.parse(trimmed);
         const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-        const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
         if (providerCost) {
           parsed.providerReportedCost = providerCost;
-        }
-        if (providerEnergy) {
-          parsed.providerReportedEnergy = providerEnergy;
         }
         return parsed;
       } catch (e) {
@@ -337,9 +294,8 @@ export class DebugLoggingInspector extends BaseInspector {
     const lines = fullBody.split(/\r?\n/);
     let snapshot: any = null;
 
-    // Extract provider-reported cost and energy from SSE comment lines
+    // Extract provider-reported cost from SSE comment lines
     const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-    const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
 
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
@@ -358,10 +314,6 @@ export class DebugLoggingInspector extends BaseInspector {
       snapshot.providerReportedCost = providerCost;
     }
 
-    if (providerEnergy && snapshot) {
-      snapshot.providerReportedEnergy = providerEnergy;
-    }
-
     return snapshot;
   }
 
@@ -374,12 +326,8 @@ export class DebugLoggingInspector extends BaseInspector {
       try {
         const parsed = JSON.parse(trimmed);
         const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-        const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
         if (providerCost) {
           parsed.providerReportedCost = providerCost;
-        }
-        if (providerEnergy) {
-          parsed.providerReportedEnergy = providerEnergy;
         }
         return parsed;
       } catch (e) {
@@ -403,14 +351,10 @@ export class DebugLoggingInspector extends BaseInspector {
       }
     }
 
-    // Attach provider-reported cost and energy if found in SSE comments
+    // Attach provider-reported cost if found in SSE comments
     const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-    const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
     if (providerCost && snapshot) {
       snapshot.providerReportedCost = providerCost;
-    }
-    if (providerEnergy && snapshot) {
-      snapshot.providerReportedEnergy = providerEnergy;
     }
 
     return snapshot;
@@ -494,14 +438,10 @@ export class DebugLoggingInspector extends BaseInspector {
       }
     }
 
-    // Extract provider-reported cost and energy from SSE comment lines
+    // Extract provider-reported cost from SSE comment lines
     const providerCost = this.extractProviderCostFromSSEComments(fullBody);
-    const providerEnergy = this.extractProviderEnergyFromSSEComments(fullBody);
     if (providerCost) {
       snapshot.providerReportedCost = providerCost;
-    }
-    if (providerEnergy) {
-      snapshot.providerReportedEnergy = providerEnergy;
     }
 
     return snapshot;

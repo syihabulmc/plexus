@@ -10,7 +10,6 @@ get:
     - `base_url` — Override URL for the provider
     - `api_key` — API key (encrypted at rest)
     - `quota` — Optional quota checker configuration
-    - GPU profile fields for energy estimation
 
     **Admin only** — limited principals receive 403.
   security:

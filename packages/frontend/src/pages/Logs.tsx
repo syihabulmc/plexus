@@ -16,16 +16,17 @@ import {
   type UsageSortField,
 } from '../lib/api';
 import {
-  KWH_PER_SLICE,
   formatBytes,
   formatCostIn,
-  formatEnergy,
   formatMs,
-  formatSlices,
   formatTPS,
   getEstimatedBytesPerToken,
 } from '../lib/format';
-import { isClipboardAvailable, copyToClipboard } from '../lib/clipboard';
+import {
+  isClipboardAvailable,
+  copyToClipboard,
+  getClipboardUnavailableMessage,
+} from '../lib/clipboard';
 import { formatApiTypeLabel, getApiBaseType } from '../lib/apiFormats';
 import { DateTimePicker } from '../components/ui/DateTimePicker';
 import {
@@ -626,7 +627,9 @@ const DesktopLogRow = React.memo(
                   }}
                   className="opacity-0 group-hover/model:opacity-100 transition-opacity bg-transparent border-0 cursor-pointer p-0 flex items-center disabled:opacity-0"
                   title={
-                    isClipboardAvailable() ? 'Copy incoming model alias' : 'Copy requires HTTPS'
+                    isClipboardAvailable()
+                      ? 'Copy incoming model alias'
+                      : getClipboardUnavailableMessage()
                   }
                   disabled={!isClipboardAvailable()}
                 >
@@ -646,7 +649,9 @@ const DesktopLogRow = React.memo(
                   }}
                   className="opacity-0 group-hover/selected:opacity-100 transition-opacity bg-transparent border-0 cursor-pointer p-0 flex items-center disabled:opacity-0"
                   title={
-                    isClipboardAvailable() ? 'Copy selected model name' : 'Copy requires HTTPS'
+                    isClipboardAvailable()
+                      ? 'Copy selected model name'
+                      : getClipboardUnavailableMessage()
                   }
                   disabled={!isClipboardAvailable()}
                 >
@@ -670,7 +675,9 @@ const DesktopLogRow = React.memo(
                   }}
                   className="opacity-0 group-hover/vft:opacity-100 transition-opacity bg-transparent border-0 cursor-pointer p-0 flex items-center disabled:opacity-0"
                   title={
-                    isClipboardAvailable() ? 'Copy fallthrough model name' : 'Copy requires HTTPS'
+                    isClipboardAvailable()
+                      ? 'Copy fallthrough model name'
+                      : getClipboardUnavailableMessage()
                   }
                   disabled={!isClipboardAvailable()}
                 >
@@ -974,15 +981,7 @@ const DesktopLogRow = React.memo(
             );
           })()}
         </td>
-        <td
-          className="px-2 py-1.5 text-center border-b border-border-glass text-text align-middle"
-          title={
-            log.kwhUsed != null && log.kwhUsed > 0
-              ? `Energy: ${formatEnergy(log.kwhUsed)} ≈ ${formatSlices(log.kwhUsed / KWH_PER_SLICE)} toast slices`
-              : undefined
-          }
-          style={log.kwhUsed != null && log.kwhUsed > 0 ? { cursor: 'help' } : undefined}
-        >
+        <td className="px-2 py-1.5 text-center border-b border-border-glass text-text align-middle">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             {/* Row 1: Messages and Tool calls */}
             <div style={{ display: 'flex', gap: '16px' }}>

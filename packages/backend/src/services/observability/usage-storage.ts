@@ -6,9 +6,6 @@ import { EventEmitter } from 'node:events';
 import { eq, and, gte, lte, like, desc, asc, sql, getTableName } from 'drizzle-orm';
 import { DebugLogRecord, DebugManager } from './debug-manager';
 import { getCurrentKeyName } from './request-context';
-import { estimateKwhUsed } from './inference-energy';
-import { resolveModelParams, DEFAULT_GPU_PARAMS } from '@plexus/shared';
-import type { ModelArchitecture, GpuParams } from '@plexus/shared';
 import type { StallInspector } from '../inspectors/stall-inspector';
 
 export interface ProgressUpdate {
@@ -22,8 +19,6 @@ export interface ProgressUpdate {
   state: 'DISPATCHED' | 'GRACE_PERIOD' | 'MONITORING' | 'THROUGHPUT_STALLED';
   elapsedMs: number;
 }
-
-// ModelArchitecture is now imported from @plexus/shared
 
 export interface UsageFilters {
   requestId?: string;
@@ -671,7 +666,6 @@ export class UsageStorageService extends EventEmitter {
           parallelToolCallsEnabled: schema.requestUsage.parallelToolCallsEnabled,
           toolCallsCount: schema.requestUsage.toolCallsCount,
           finishReason: schema.requestUsage.finishReason,
-          kwhUsed: schema.requestUsage.kwhUsed,
           hasDebug: sql<boolean>`EXISTS(SELECT 1 FROM ${schema.debugLogs} dl WHERE dl.request_id = request_usage.request_id)`,
           hasError: sql<boolean>`EXISTS(SELECT 1 FROM ${schema.inferenceErrors} ie WHERE ie.request_id = request_usage.request_id)`,
         })
@@ -732,7 +726,6 @@ export class UsageStorageService extends EventEmitter {
         parallelToolCallsEnabled: !!row.parallelToolCallsEnabled,
         toolCallsCount: row.toolCallsCount,
         finishReason: row.finishReason,
-        kwhUsed: row.kwhUsed,
       }));
 
       const countResults = await db
@@ -1046,91 +1039,6 @@ export class UsageStorageService extends EventEmitter {
     } catch (error) {
       logger.error('Failed to get provider performance', { provider, model, error });
       return [];
-    }
-  }
-
-  /**
-   * Recalculate energy usage for all requests associated with an alias.
-   * This is called when an alias's model_architecture is updated.
-   *
-   * @param aliasSlug - The alias slug to recalculate energy for
-   * @param modelArchitecture - The new model architecture parameters
-   * @param providerGpuParams - Optional map of provider -> resolved GpuParams
-   * @returns The number of records updated
-   */
-  async recalculateEnergyForAlias(
-    aliasSlug: string,
-    modelArchitecture: ModelArchitecture,
-    providerGpuParams?: Record<string, GpuParams>
-  ): Promise<number> {
-    try {
-      const db = this.ensureDb();
-      const BATCH_SIZE = 500;
-      let totalUpdated = 0;
-      let offset = 0;
-
-      logger.debug(`Recalculating energy for alias ${aliasSlug} (batched)`);
-
-      // Process in batches using limit+offset to avoid loading all rows into memory
-      while (true) {
-        const batch = await db
-          .select({
-            requestId: this.schema.requestUsage.requestId,
-            tokensInput: this.schema.requestUsage.tokensInput,
-            tokensOutput: this.schema.requestUsage.tokensOutput,
-            provider: this.schema.requestUsage.finalAttemptProvider,
-          })
-          .from(this.schema.requestUsage)
-          .where(eq(this.schema.requestUsage.incomingModelAlias, aliasSlug))
-          .limit(BATCH_SIZE)
-          .offset(offset);
-
-        if (batch.length === 0) break;
-
-        // Process this batch
-        await Promise.all(
-          batch.map(async (request: any) => {
-            const tokensInput = request.tokensInput || 0;
-            const tokensOutput = request.tokensOutput || 0;
-
-            if (tokensInput === 0 && tokensOutput === 0) {
-              return; // Skip requests with no tokens
-            }
-
-            // Get GPU params for this provider (use default H100 if not specified)
-            const gpuParams = providerGpuParams?.[request.provider || ''] ?? DEFAULT_GPU_PARAMS;
-
-            // Build model params from architecture using shared resolver
-            const modelParams = resolveModelParams(modelArchitecture);
-
-            // Calculate new energy
-            const kwhUsed = estimateKwhUsed(tokensInput, tokensOutput, modelParams, gpuParams);
-
-            // Update the record
-            await db
-              .update(this.schema.requestUsage)
-              .set({ kwhUsed })
-              .where(eq(this.schema.requestUsage.requestId, request.requestId));
-
-            totalUpdated++;
-          })
-        );
-
-        offset += BATCH_SIZE;
-
-        // If we got fewer than BATCH_SIZE rows, we've reached the end
-        if (batch.length < BATCH_SIZE) break;
-      }
-
-      if (totalUpdated === 0) {
-        logger.debug(`No requests found for alias ${aliasSlug}`);
-      } else {
-        logger.debug(`Recalculated energy for ${totalUpdated} requests for alias ${aliasSlug}`);
-      }
-      return totalUpdated;
-    } catch (error) {
-      logger.error(`Failed to recalculate energy for alias ${aliasSlug}`, error);
-      throw error;
     }
   }
 }

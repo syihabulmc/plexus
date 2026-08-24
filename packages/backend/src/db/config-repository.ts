@@ -22,7 +22,6 @@ import type {
   StallConfigType,
   MetadataOverrides,
 } from '../config';
-import { resolveGpuParams } from '@plexus/shared';
 
 export interface CustomCheckerRecord {
   id: string;
@@ -455,12 +454,6 @@ export class ConfigRepository {
         : null,
       modelAutosyncEnabled: fromBool(config.model_autosync?.enabled === true),
       modelAutosyncInterval: Math.max(1, config.model_autosync?.intervalMinutes ?? 60),
-      // GPU Profile settings for inference energy calculation
-      gpuProfile: config.gpu_profile ?? null,
-      gpuRamGb: config.gpu_ram_gb ?? null,
-      gpuBandwidthTbS: config.gpu_bandwidth_tb_s ?? null,
-      gpuFlopsTflop: config.gpu_flops_tflop ?? null,
-      gpuPowerDrawWatts: config.gpu_power_draw_watts ?? null,
       adapter:
         config.adapter && Array.isArray(config.adapter) && config.adapter.length > 0
           ? toJson(config.adapter)
@@ -710,52 +703,6 @@ export class ConfigRepository {
         const normalized = normalizeAdapterEntries(adapterVal);
         return normalized && normalized.length > 0 ? { adapter: normalized } : {};
       })(),
-      // GPU Profile settings — resolve named profiles to concrete values for
-      // backward compatibility with existing DB rows that may only have gpuProfile
-      // set without the numeric fields.
-      ...(() => {
-        const gpuProfile = row.gpuProfile;
-        if (!gpuProfile) {
-          // No profile set — include whatever numeric fields exist
-          return {
-            ...(row.gpuRamGb != null ? { gpu_ram_gb: row.gpuRamGb } : {}),
-            ...(row.gpuBandwidthTbS != null ? { gpu_bandwidth_tb_s: row.gpuBandwidthTbS } : {}),
-            ...(row.gpuFlopsTflop != null ? { gpu_flops_tflop: row.gpuFlopsTflop } : {}),
-            ...(row.gpuPowerDrawWatts != null
-              ? { gpu_power_draw_watts: row.gpuPowerDrawWatts }
-              : {}),
-          };
-        }
-        // Profile name exists — if any numeric field is missing, resolve from the profile name
-        if (row.gpuRamGb == null || row.gpuBandwidthTbS == null) {
-          const resolved = resolveGpuParams(
-            gpuProfile,
-            gpuProfile === 'custom'
-              ? {
-                  ram_gb: row.gpuRamGb ?? undefined,
-                  bandwidth_tb_s: row.gpuBandwidthTbS ?? undefined,
-                  flops_tflop: row.gpuFlopsTflop ?? undefined,
-                  power_draw_watts: row.gpuPowerDrawWatts ?? undefined,
-                }
-              : undefined
-          );
-          return {
-            gpu_profile: gpuProfile,
-            gpu_ram_gb: resolved.ram_gb,
-            gpu_bandwidth_tb_s: resolved.bandwidth_tb_s,
-            gpu_flops_tflop: resolved.flops_tflop,
-            gpu_power_draw_watts: resolved.power_draw_watts,
-          };
-        }
-        // All numeric fields already present — just use them directly
-        return {
-          gpu_profile: gpuProfile,
-          gpu_ram_gb: row.gpuRamGb!,
-          gpu_bandwidth_tb_s: row.gpuBandwidthTbS!,
-          gpu_flops_tflop: row.gpuFlopsTflop!,
-          gpu_power_draw_watts: row.gpuPowerDrawWatts!,
-        };
-      })(),
       ...(row.timeoutMs != null ? { timeoutMs: row.timeoutMs } : {}),
       ...(row.stallTtfbMs != null ? { stallTtfbMs: row.stallTtfbMs } : {}),
       ...(row.stallTtfbBytes != null ? { stallTtfbBytes: row.stallTtfbBytes } : {}),
@@ -1002,8 +949,6 @@ export class ConfigRepository {
       metadataSource: config.metadata?.source ?? null,
       metadataSourcePath: metadataSourcePath ?? null,
       useImageFallthrough: fromBool(config.use_image_fallthrough === true),
-      // Model architecture override for inference energy calculation
-      modelArchitecture: config.model_architecture ? toJson(config.model_architecture) : null,
       enforceLimits: fromBool(config.enforce_limits === true),
       stickySession: fromBool(config.sticky_session === true),
       preferredApi: config.preferred_api ? toJson(config.preferred_api) : null,
@@ -1150,8 +1095,6 @@ export class ConfigRepository {
       ...(row.modelType ? { type: row.modelType } : {}),
       ...(row.additionalAliases ? { additional_aliases: parseJson(row.additionalAliases) } : {}),
       ...(row.advanced ? { advanced: parseJson(row.advanced) } : {}),
-      // Model architecture override for inference energy calculation
-      ...(row.modelArchitecture ? { model_architecture: parseJson(row.modelArchitecture) } : {}),
       ...(row.preferredApi ? { preferred_api: parseJson(row.preferredApi) } : {}),
       ...(row.piModel ? { pi_model: parseJson(row.piModel) } : {}),
       ...(row.extraBody ? { extraBody: parseJson(row.extraBody) } : {}),

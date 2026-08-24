@@ -41,13 +41,6 @@ export const providers = pgTable(
     quotaCheckerOptions: text('quota_checker_options'), // JSON or encrypted string
     modelAutosyncEnabled: boolean('model_autosync_enabled').notNull().default(false),
     modelAutosyncInterval: integer('model_autosync_interval').notNull().default(60),
-    // GPU Profile settings — display hint + resolved numeric params
-    // gpu_profile is kept as a display hint; the 4 numeric fields are the source of truth.
-    gpuProfile: text('gpu_profile'), // GPU profile name (e.g. 'H100', 'custom') — display hint only
-    gpuRamGb: real('gpu_ram_gb'), // RAM in GB
-    gpuBandwidthTbS: real('gpu_bandwidth_tb_s'), // Bandwidth in TB/s
-    gpuFlopsTflop: real('gpu_flops_tflop'), // FLOPS in TFLOP
-    gpuPowerDrawWatts: integer('gpu_power_draw_watts'), // Power draw in watts
     adapter: jsonb('adapter'), // string[] — provider-level adapter names
     autoCompat: boolean('auto_compat').notNull().default(false), // Enable pi-ai registry-aware compatibility mapping
     timeoutMs: integer('timeout_ms'), // Per-provider upstream request timeout in ms (NULL = use global default)
