@@ -15,3 +15,5 @@ plexus.exe
 testcommands
 AGENTS.md
 CONFIGURATION.md
+railway.toml
+railway.json

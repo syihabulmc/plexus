@@ -31,6 +31,35 @@ docker run -p 4000:4000 \
 -   Set `LOG_LEVEL` to control verbosity.
 -   The Docker image includes `bunx` and `uvx` so Plexus can run configured Local HTTP MCP servers inside the container.
 
+## Railway
+
+Plexus can be deployed to [Railway](https://railway.app) using the included Dockerfile configuration.
+
+### Quick Deploy
+
+1. **Connect your repository** to Railway
+2. Railway will automatically detect the `Dockerfile` and use it to build
+3. Set the required environment variables in Railway dashboard:
+   - `ADMIN_KEY` — **Required**. Set a secure password for the admin dashboard
+   - `DATABASE_URL` — Optional. Defaults to SQLite. For production, use Railway's PostgreSQL plugin:
+     ```
+     postgres://postgres:PASSWORD@HOST:PORT/railway
+     ```
+   - `ENCRYPTION_KEY` — Recommended. Generate with `openssl rand -hex 32`
+   - `LOG_LEVEL` — Optional. Default: `info`
+
+### Configuration Files
+
+- `railway.toml` — Railway deployment configuration (Dockerfile builder, health check, restart policy)
+- `railway.json` — Alternative JSON format with the same settings
+
+### Notes
+
+- Railway automatically assigns a `PORT` environment variable — Plexus reads this at startup
+- The `/health` endpoint is used for health checks
+- For persistent data, use Railway's PostgreSQL plugin instead of SQLite
+- Railway provides a public URL automatically after deployment
+
 ## Building the Docker Image
 
 If you want to build the image yourself:
