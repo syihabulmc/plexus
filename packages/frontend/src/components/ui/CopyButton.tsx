@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { clsx } from 'clsx';
-import { isClipboardAvailable, copyToClipboard, getClipboardUnavailableMessage } from '../../lib/clipboard';
+import {
+  isClipboardAvailable,
+  copyToClipboard,
+  getClipboardUnavailableMessage,
+} from '../../lib/clipboard';
 
 interface CopyButtonProps {
   value: string;

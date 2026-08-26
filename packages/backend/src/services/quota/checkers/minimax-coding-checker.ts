@@ -36,10 +36,7 @@ function formatModelName(model: string): string {
     .join(' ');
 }
 
-function totalOf(
-  model: MiniMaxCodingModelRemain,
-  field: keyof MiniMaxCodingModelRemain
-): number {
+function totalOf(model: MiniMaxCodingModelRemain, field: keyof MiniMaxCodingModelRemain): number {
   return Math.max(0, Number(model[field]) || 0);
 }
 

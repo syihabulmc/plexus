@@ -243,7 +243,7 @@ describe('QuotaScheduler persistence', () => {
     }
   });
 
-  it('does not schedule intervals when background quota check is disabled (default)', async () => {
+  it('runs initial probe but skips periodic polling when background quota check is disabled (default)', async () => {
     const scheduler = QuotaScheduler.getInstance();
     const runCheckNow = registerSpy(scheduler, 'runCheckNow').mockResolvedValue(null);
 
@@ -260,10 +260,11 @@ describe('QuotaScheduler persistence', () => {
 
     // Configs are still registered so getLatestQuota keeps working.
     expect(scheduler.getCheckerIds()).toContain('disabled-bg-checker');
-    // But no setInterval was created and no initial check fired.
+    // Initial probe fires once so the UI has data immediately…
+    expect(runCheckNow).toHaveBeenCalledWith('disabled-bg-checker');
+    // …but no setInterval was created — that is what the toggle gates.
     const intervals = Reflect.get(scheduler, 'intervals') as Map<string, unknown>;
     expect(intervals.size).toBe(0);
-    expect(runCheckNow).not.toHaveBeenCalled();
   });
 
   it('starts intervals on reload after the setting flips on', async () => {
@@ -279,7 +280,7 @@ describe('QuotaScheduler persistence', () => {
       options: { apiKey: 'k' },
     };
 
-    // Setting is off (default after beforeEach): configs register, no intervals.
+    // Setting is off (default after beforeEach): initial probe runs, no intervals.
     await scheduler.initialize([config]);
     expect(Reflect.get(scheduler, 'intervals') as Map<string, unknown>).toHaveProperty('size', 0);
 
@@ -289,7 +290,6 @@ describe('QuotaScheduler persistence', () => {
 
     const intervals = Reflect.get(scheduler, 'intervals') as Map<string, unknown>;
     expect(intervals.has('flip-on-checker')).toBe(true);
-    expect(runCheckNow).toHaveBeenCalledWith('flip-on-checker');
   });
 
   it('stops intervals on reload after the setting flips off, but keeps configs', async () => {

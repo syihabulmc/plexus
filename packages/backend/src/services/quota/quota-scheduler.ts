@@ -95,9 +95,20 @@ export class QuotaScheduler {
     }
 
     const backgroundEnabled = await this.isBackgroundCheckEnabled();
+
+    // Always run an initial probe on startup so the Quotas UI has data
+    // immediately and operators can verify their checkers work. The
+    // backgroundQuotaCheck.enabled setting only gates the *periodic*
+    // polling below — manual refresh from the UI keeps working regardless.
+    for (const [id, config] of this.configs) {
+      this.runCheckNow(id).catch((error) => {
+        logger.error(`Initial quota check failed for '${id}': ${error}`);
+      });
+    }
+
     if (!backgroundEnabled) {
       logger.info(
-        'QuotaScheduler: background quota check is disabled via setting; skipping interval scheduling'
+        'QuotaScheduler: background quota check is disabled via setting; periodic polling will not start'
       );
       return;
     }
@@ -108,9 +119,6 @@ export class QuotaScheduler {
       const intervalId = setInterval(() => this.runCheckNow(id), intervalMs);
       this.intervals.set(id, intervalId);
       logger.info(`Scheduled quota checker '${id}' to run every ${config.intervalMinutes} minutes`);
-      this.runCheckNow(id).catch((error) => {
-        logger.error(`Initial quota check failed for '${id}': ${error}`);
-      });
     }
   }
 
@@ -523,13 +531,22 @@ export class QuotaScheduler {
 
     // If background polling is off, keep registered configs (so getLatestQuota
     // still works for the UI) but tear down any intervals that were scheduled
-    // before the toggle flipped.
+    // before the toggle flipped. Newly registered configs still get an initial
+    // probe so the UI shows data right away — only periodic polling is gated.
     if (!backgroundEnabled) {
       for (const [id, intervalId] of this.intervals) {
         clearInterval(intervalId);
         logger.info(`Stopped quota checker '${id}' (background check disabled)`);
       }
       this.intervals.clear();
+      for (const config of activeConfigs) {
+        if (!this.configs.has(config.id)) {
+          this.configs.set(config.id, config);
+          this.runCheckNow(config.id).catch((error) => {
+            logger.error(`Initial quota check failed for '${config.id}' on reload: ${error}`);
+          });
+        }
+      }
       return;
     }
 
