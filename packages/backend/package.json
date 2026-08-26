@@ -26,6 +26,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@plexus/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.52",
+    "@tursodatabase/serverless": "^1.4.0",
     "csv-parse": "^7.0.2",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
