@@ -16,11 +16,12 @@ type PgliteDb = any;
 let dbInstance: SqliteDb | PostgresJsDb | PgliteDb | null = null;
 let sqlClient: postgres.Sql | null = null;
 let pgliteClient: any = null;
+let tursoClient: any = null;
 const PGLITE_BOOT_EXIT_CODE = 99;
 let currentDialect: SupportedDialect | null = null;
 let currentSchema: any = null;
 
-function parseConnectionString(uri: string): {
+export function parseConnectionString(uri: string): {
   dialect: SupportedDialect;
   connectionString: string;
 } {
@@ -36,10 +37,16 @@ function parseConnectionString(uri: string): {
       connStr = ':memory:';
     }
     return { dialect: 'sqlite', connectionString: connStr };
+  } else if (uri.startsWith('libsql://')) {
+    // Turso Cloud / libSQL remote server — still the SQLite dialect, reached
+    // over Hrana HTTP via @tursodatabase/serverless/compat (see below).
+    return { dialect: 'sqlite', connectionString: uri };
   } else if (uri.startsWith('postgres://') || uri.startsWith('postgresql://')) {
     return { dialect: 'postgres', connectionString: uri };
   }
-  throw new Error(`Invalid database URI: must start with sqlite:// or postgres://. Got: ${uri}`);
+  throw new Error(
+    `Invalid database URI: must start with sqlite://, libsql:// or postgres://. Got: ${uri}`
+  );
 }
 
 function resolvePath(relPath: string): string {
@@ -79,20 +86,6 @@ export function initializeDatabase(connectionString?: string) {
   logger.silly(`Initializing ${dialect} database...`);
 
   if (dialect === 'sqlite') {
-    const dbPath = connStr === ':memory:' ? ':memory:' : resolvePath(connStr);
-
-    if (dbPath !== ':memory:') {
-      const dir = path.dirname(dbPath);
-      if (dir !== '.' && !fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-    }
-
-    const sqlite = new Database(dbPath);
-    sqlite.exec('PRAGMA journal_mode = WAL');
-    sqlite.exec('PRAGMA busy_timeout = 5000');
-    sqlite.exec('PRAGMA foreign_keys = ON');
-
     const sqliteSchema = require('../../drizzle/schema/sqlite/index');
     const {
       requestUsage,
@@ -115,27 +108,67 @@ export function initializeDatabase(connectionString?: string) {
     } = sqliteSchema;
 
     currentSchema = sqliteSchema;
-    dbInstance = drizzle(sqlite, {
-      schema: {
-        requestUsage,
-        providerCooldowns,
-        debugLogs,
-        inferenceErrors,
-        providerPerformance,
-        quotaState,
-        providers: providersTable,
-        providerModels,
-        modelAliases,
-        modelAliasTargets,
-        apiKeys,
-        userQuotaDefinitions,
-        mcpServers,
-        mcpKeys,
-        systemSettings,
-        oauthCredentials,
-        customCheckers,
-      },
-    });
+
+    const schema = {
+      requestUsage,
+      providerCooldowns,
+      debugLogs,
+      inferenceErrors,
+      providerPerformance,
+      quotaState,
+      providers: providersTable,
+      providerModels,
+      modelAliases,
+      modelAliasTargets,
+      apiKeys,
+      userQuotaDefinitions,
+      mcpServers,
+      mcpKeys,
+      systemSettings,
+      oauthCredentials,
+      customCheckers,
+    };
+
+    if (connStr.startsWith('libsql://')) {
+      // Remote Turso / libSQL server: pure-fetch Hrana client exposed through
+      // the @libsql/client-compatible API (/compat), wrapped by drizzle-orm/libsql.
+      const urlToken = connStr.match(/[?&]authToken=([^&]+)/)?.[1];
+      const authToken =
+        process.env.TURSO_AUTH_TOKEN ??
+        (typeof urlToken === 'string' ? decodeURIComponent(urlToken) : undefined);
+      if (!authToken) {
+        throw new Error(
+          'TURSO_AUTH_TOKEN environment variable (or ?authToken= URL parameter) is required for libsql:// connections'
+        );
+      }
+      const { createClient } = require('@tursodatabase/serverless/compat');
+      const { drizzle: drizzleLibSql } = require('drizzle-orm/libsql');
+      tursoClient = createClient({ url: connStr, authToken });
+      // ponytail: every query is now one HTTPS round trip; if hot-path latency
+      // hurts, upgrade to an embedded replica (@tursodatabase/database sync).
+      dbInstance = drizzleLibSql(tursoClient, { schema });
+      logger.silly(
+        `Connecting to Turso: ${connStr.replace(/[?&]authToken=[^&]+/, '?authToken=***')}`
+      );
+      return dbInstance;
+    }
+
+    // Local SQLite (Bun native) — original behavior preserved.
+    const dbPath = connStr === ':memory:' ? ':memory:' : resolvePath(connStr);
+
+    if (dbPath !== ':memory:') {
+      const dir = path.dirname(dbPath);
+      if (dir !== '.' && !fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
+
+    const sqlite = new Database(dbPath);
+    sqlite.exec('PRAGMA journal_mode = WAL');
+    sqlite.exec('PRAGMA busy_timeout = 5000');
+    sqlite.exec('PRAGMA foreign_keys = ON');
+
+    dbInstance = drizzle(sqlite, { schema });
   } else {
     const postgresDriver = getPostgresDriver();
     const pgSchema = require('../../drizzle/schema/postgres/index');
@@ -250,6 +283,14 @@ export function getCurrentDialect(): SupportedDialect {
 }
 
 export async function closeDatabase() {
+  if (tursoClient) {
+    try {
+      tursoClient.close();
+    } catch {
+      // Compat clients are disposable; ignore double-close/shutdown races.
+    }
+    tursoClient = null;
+  }
   if (sqlClient) {
     await sqlClient.end();
     sqlClient = null;
