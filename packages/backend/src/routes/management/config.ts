@@ -12,6 +12,8 @@ import {
 import { validateRawProviderSlug } from '../../services/dispatch/raw-passthrough';
 import { ConfigService } from '../../services/configuration/config-service';
 import { DebugManager } from '../../services/observability/debug-manager';
+import { QuotaScheduler } from '../../services/quota/quota-scheduler';
+import { ModelMetadataManager } from '../../services/models/model-metadata-manager';
 import { isValidIpRule } from '../../utils/ip-match';
 import {
   getCheckerDefinitions,
@@ -828,6 +830,88 @@ export async function registerConfigRoutes(
       return reply.send(updated);
     } catch (e: any) {
       logger.error('Failed to patch background-exploration config', e);
+      return reply.code(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  // ─── Background Quota Check ─────────────────────────────────────
+
+  fastify.get('/v0/management/config/background-quota-check', async (_request, reply) => {
+    try {
+      const enabled = await configService.getRepository().getBackgroundQuotaCheckEnabled();
+      return reply.send({ enabled });
+    } catch (e: any) {
+      logger.error('Failed to read background-quota-check config', e);
+      return reply.code(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  fastify.patch('/v0/management/config/background-quota-check', async (request, reply) => {
+    const body = request.body as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return reply.code(400).send({ error: 'Object body is required' });
+    }
+
+    try {
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== 'boolean') {
+          return reply.code(400).send({ error: 'enabled must be a boolean' });
+        }
+        await configService.setSetting('backgroundQuotaCheck.enabled', body.enabled);
+
+        // Re-apply the scheduler with the new setting so the change takes
+        // effect immediately, without waiting for the next config rebuild.
+        const scheduler = QuotaScheduler.getInstance();
+        if (scheduler.isInitialized()) {
+          const quotas = configService.getConfig().quotas ?? [];
+          await scheduler.reload(quotas);
+        }
+      }
+
+      const enabled = await configService.getRepository().getBackgroundQuotaCheckEnabled();
+      logger.debug(`Background quota check config updated via API (enabled=${enabled})`);
+      return reply.send({ enabled });
+    } catch (e: any) {
+      logger.error('Failed to patch background-quota-check config', e);
+      return reply.code(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  // ─── Model Metadata Auto-Refresh ─────────────────────────────
+
+  fastify.get('/v0/management/config/model-metadata-auto-refresh', async (_request, reply) => {
+    try {
+      const enabled = await configService.getRepository().getModelMetadataAutoRefreshEnabled();
+      return reply.send({ enabled });
+    } catch (e: any) {
+      logger.error('Failed to read model-metadata-auto-refresh config', e);
+      return reply.code(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  fastify.patch('/v0/management/config/model-metadata-auto-refresh', async (request, reply) => {
+    const body = request.body as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return reply.code(400).send({ error: 'Object body is required' });
+    }
+
+    try {
+      let enabled: boolean | undefined;
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== 'boolean') {
+          return reply.code(400).send({ error: 'enabled must be a boolean' });
+        }
+        enabled = body.enabled;
+        await configService.setSetting('modelMetadataAutoRefresh.enabled', body.enabled);
+        // Apply immediately so the change takes effect without a restart.
+        await ModelMetadataManager.getInstance().setAutoRefreshEnabled(body.enabled);
+      }
+
+      const updated = await configService.getRepository().getModelMetadataAutoRefreshEnabled();
+      logger.debug(`Model metadata auto-refresh config updated via API (enabled=${updated})`);
+      return reply.send({ enabled: updated });
+    } catch (e: any) {
+      logger.error('Failed to patch model-metadata-auto-refresh config', e);
       return reply.code(500).send({ error: 'Internal server error' });
     }
   });

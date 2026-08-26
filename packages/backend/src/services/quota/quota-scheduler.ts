@@ -9,8 +9,9 @@ import {
 } from './checker-registry';
 import type { MeterCheckResult, Meter } from '../../types/meter';
 import { toDbTimestampMs } from '../../utils/normalize';
-import { eq, desc, gte, and } from 'drizzle-orm';
+import { eq, desc, gte, and, sql } from 'drizzle-orm';
 import { CooldownManager } from '../runtime/cooldown-manager';
+import { ConfigService } from '../configuration/config-service';
 import { INDEFINITE_COOLDOWN_MS } from '@plexus/shared';
 
 const DEFAULT_EXHAUSTION_THRESHOLD = 99;
@@ -53,6 +54,23 @@ export class QuotaScheduler {
     return { db: this.db, schema: this.schema! };
   }
 
+  /**
+   * Read the `backgroundQuotaCheck.enabled` setting. Defaults to `false` so a
+   * fresh install never pings quota APIs on its own — operators opt in.
+   */
+  private async isBackgroundCheckEnabled(): Promise<boolean> {
+    try {
+      return await ConfigService.getInstance().getRepository().getBackgroundQuotaCheckEnabled();
+    } catch (err) {
+      logger.warn(
+        `QuotaScheduler: failed to read backgroundQuotaCheck.enabled, defaulting to off: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      return false;
+    }
+  }
+
   async initialize(quotaConfigs: QuotaConfig[]): Promise<void> {
     if (!this.checkersLoaded) {
       await loadAllCheckers();
@@ -74,6 +92,14 @@ export class QuotaScheduler {
       logger.info(
         `Registered quota checker '${config.id}' (${config.type}) for provider '${config.provider}'`
       );
+    }
+
+    const backgroundEnabled = await this.isBackgroundCheckEnabled();
+    if (!backgroundEnabled) {
+      logger.info(
+        'QuotaScheduler: background quota check is disabled via setting; skipping interval scheduling'
+      );
+      return;
     }
 
     for (const [id, config] of this.configs) {
@@ -477,6 +503,8 @@ export class QuotaScheduler {
       await loadCustomCheckers();
     }
 
+    const backgroundEnabled = await this.isBackgroundCheckEnabled();
+
     const existingIds = new Set(this.configs.keys());
     const activeConfigs = quotaConfigs.filter((c) => c.enabled && getCheckerDefinition(c.type));
     const activeIds = new Set(activeConfigs.map((c) => c.id));
@@ -491,6 +519,18 @@ export class QuotaScheduler {
         this.configs.delete(id);
         logger.info(`Removed quota checker '${id}' on reload`);
       }
+    }
+
+    // If background polling is off, keep registered configs (so getLatestQuota
+    // still works for the UI) but tear down any intervals that were scheduled
+    // before the toggle flipped.
+    if (!backgroundEnabled) {
+      for (const [id, intervalId] of this.intervals) {
+        clearInterval(intervalId);
+        logger.info(`Stopped quota checker '${id}' (background check disabled)`);
+      }
+      this.intervals.clear();
+      return;
     }
 
     for (const config of activeConfigs) {

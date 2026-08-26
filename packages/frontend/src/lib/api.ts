@@ -2762,6 +2762,29 @@ export const api = {
     return (await res.json()) as ModelMetadataRefreshResult;
   },
 
+  /** Fetch whether the 60-minute model metadata auto-refresh is on. */
+  getModelMetadataAutoRefresh: async (): Promise<{ enabled: boolean }> => {
+    const res = await fetchWithAuth(`${API_BASE}/v0/management/config/model-metadata-auto-refresh`);
+    if (!res.ok) throw new Error('Failed to fetch model metadata auto-refresh setting');
+    return res.json();
+  },
+
+  /** Update the 60-minute model metadata auto-refresh toggle. */
+  setModelMetadataAutoRefresh: async (updates: {
+    enabled: boolean;
+  }): Promise<{ enabled: boolean }> => {
+    const res = await fetchWithAuth(
+      `${API_BASE}/v0/management/config/model-metadata-auto-refresh`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      }
+    );
+    if (!res.ok) throw new Error('Failed to update model metadata auto-refresh setting');
+    return res.json();
+  },
+
   getPiProviders: async (): Promise<string[]> => {
     const res = await fetchWithAuth(`${API_BASE}/v0/management/pi/providers`);
     if (!res.ok) throw new Error('Failed to fetch pi providers');
@@ -3601,6 +3624,26 @@ export const api = {
       body: JSON.stringify(updates),
     });
     if (!res.ok) throw new Error('Failed to update background exploration settings');
+    return res.json();
+  },
+
+  // ─── Background Quota Check Settings ────────────────────────────
+
+  /** Fetch the background quota check toggle. */
+  getBackgroundQuotaCheck: async (): Promise<{ enabled: boolean }> => {
+    const res = await fetchWithAuth(`${API_BASE}/v0/management/config/background-quota-check`);
+    if (!res.ok) throw new Error('Failed to fetch background quota check settings');
+    return res.json();
+  },
+
+  /** Update the background quota check toggle. */
+  setBackgroundQuotaCheck: async (updates: { enabled: boolean }): Promise<{ enabled: boolean }> => {
+    const res = await fetchWithAuth(`${API_BASE}/v0/management/config/background-quota-check`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error('Failed to update background quota check settings');
     return res.json();
   },
 

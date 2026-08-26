@@ -220,9 +220,20 @@ try {
   // Eagerly initialize OAuth auth manager so auth.json schema migration
   // runs during startup (instead of waiting for first OAuth request).
   await OAuthAuthManager.getInstance().initialize();
-  // Load model metadata from all configured sources (non-fatal on failure)
+  // Load model metadata from all configured sources (non-fatal on failure).
+  // The periodic 60-minute auto-refresh is gated on the
+  // `modelMetadataAutoRefresh.enabled` setting (default off). Operators can
+  // still trigger an immediate reload via the "Refresh Metadata" button in
+  // the UI or by flipping the toggle on.
   const modelMetadataManager = ModelMetadataManager.getInstance();
-  modelMetadataManager.startAutoRefresh(60);
+  const autoRefreshEnabled = await configService
+    .getRepository()
+    .getModelMetadataAutoRefreshEnabled();
+  if (autoRefreshEnabled) {
+    modelMetadataManager.startAutoRefresh(60);
+  } else {
+    logger.info('Model metadata auto-refresh is disabled via setting; skipping periodic schedule');
+  }
   modelMetadataManager.refreshAll(undefined, 'startup').catch((e) => {
     logger.error('Failed to load model metadata', e);
   });

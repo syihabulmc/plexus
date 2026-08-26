@@ -469,6 +469,23 @@ export class ModelMetadataManager {
     }
   }
 
+  /**
+   * Apply the `modelMetadataAutoRefresh.enabled` setting. When on, schedules
+   * the periodic refresh (60 minutes by default). When off, clears any
+   * existing schedule. Idempotent — safe to call on every config change.
+   */
+  public async setAutoRefreshEnabled(enabled: boolean): Promise<void> {
+    if (enabled) {
+      if (this.autoRefreshTimer) {
+        // Already scheduled — keep the existing cadence.
+        return;
+      }
+      this.startAutoRefresh(this.autoRefreshIntervalMinutes);
+    } else {
+      this.stopAutoRefresh();
+    }
+  }
+
   // ─── Loaders ────────────────────────────────────
 
   private async loadOpenRouter(source: string): Promise<MetadataSourceRefreshSummary> {

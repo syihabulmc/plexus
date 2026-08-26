@@ -10,6 +10,7 @@ import {
 import { runMigrations } from '../../../db/migrate';
 import { QuotaScheduler } from '../quota-scheduler';
 import { CooldownManager } from '../../runtime/cooldown-manager';
+import { ConfigService } from '../../configuration/config-service';
 import type { MeterCheckResult, Meter } from '../../../types/meter';
 import type { QuotaConfig } from '../../../config';
 import { registerSpy } from '../../../../test/test-utils';
@@ -109,10 +110,14 @@ describe('QuotaScheduler persistence', () => {
     const db = getDatabase() as any;
     const schema = getSchema() as any;
     await db.delete(schema.meterSnapshots);
+    // Default: background quota check is OFF (matches the default setting).
+    // Tests that need polling opt in via the setting.
+    await db.delete(schema.systemSettings);
   });
 
   afterEach(async () => {
     QuotaScheduler.getInstance().stop();
+    ConfigService.resetInstance();
     await closeDatabase();
   });
 
@@ -194,6 +199,9 @@ describe('QuotaScheduler persistence', () => {
     vi.useFakeTimers();
 
     try {
+      // Opt into background polling for this test.
+      await ConfigService.getInstance().setSetting('backgroundQuotaCheck.enabled', true);
+
       const scheduler = QuotaScheduler.getInstance();
       const runCheckNow = registerSpy(scheduler, 'runCheckNow').mockResolvedValue(null);
       const initialConfig: QuotaConfig = {
@@ -233,6 +241,90 @@ describe('QuotaScheduler persistence', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not schedule intervals when background quota check is disabled (default)', async () => {
+    const scheduler = QuotaScheduler.getInstance();
+    const runCheckNow = registerSpy(scheduler, 'runCheckNow').mockResolvedValue(null);
+
+    await scheduler.initialize([
+      {
+        id: 'disabled-bg-checker',
+        provider: 'disabled-bg-provider',
+        type: 'synthetic',
+        enabled: true,
+        intervalMinutes: 1,
+        options: { apiKey: 'k' },
+      },
+    ]);
+
+    // Configs are still registered so getLatestQuota keeps working.
+    expect(scheduler.getCheckerIds()).toContain('disabled-bg-checker');
+    // But no setInterval was created and no initial check fired.
+    const intervals = Reflect.get(scheduler, 'intervals') as Map<string, unknown>;
+    expect(intervals.size).toBe(0);
+    expect(runCheckNow).not.toHaveBeenCalled();
+  });
+
+  it('starts intervals on reload after the setting flips on', async () => {
+    const scheduler = QuotaScheduler.getInstance();
+    const runCheckNow = registerSpy(scheduler, 'runCheckNow').mockResolvedValue(null);
+
+    const config: QuotaConfig = {
+      id: 'flip-on-checker',
+      provider: 'flip-on-provider',
+      type: 'synthetic',
+      enabled: true,
+      intervalMinutes: 5,
+      options: { apiKey: 'k' },
+    };
+
+    // Setting is off (default after beforeEach): configs register, no intervals.
+    await scheduler.initialize([config]);
+    expect(Reflect.get(scheduler, 'intervals') as Map<string, unknown>).toHaveProperty('size', 0);
+
+    // Operator flips the toggle on and triggers a reload.
+    await ConfigService.getInstance().setSetting('backgroundQuotaCheck.enabled', true);
+    await scheduler.reload([config]);
+
+    const intervals = Reflect.get(scheduler, 'intervals') as Map<string, unknown>;
+    expect(intervals.has('flip-on-checker')).toBe(true);
+    expect(runCheckNow).toHaveBeenCalledWith('flip-on-checker');
+  });
+
+  it('stops intervals on reload after the setting flips off, but keeps configs', async () => {
+    await ConfigService.getInstance().setSetting('backgroundQuotaCheck.enabled', true);
+    const scheduler = QuotaScheduler.getInstance();
+    await scheduler.initialize([
+      {
+        id: 'flip-off-checker',
+        provider: 'flip-off-provider',
+        type: 'synthetic',
+        enabled: true,
+        intervalMinutes: 5,
+        options: { apiKey: 'k' },
+      },
+    ]);
+    expect(
+      (Reflect.get(scheduler, 'intervals') as Map<string, unknown>).has('flip-off-checker')
+    ).toBe(true);
+
+    await ConfigService.getInstance().setSetting('backgroundQuotaCheck.enabled', false);
+    await scheduler.reload([
+      {
+        id: 'flip-off-checker',
+        provider: 'flip-off-provider',
+        type: 'synthetic',
+        enabled: true,
+        intervalMinutes: 5,
+        options: { apiKey: 'k' },
+      },
+    ]);
+
+    const intervals = Reflect.get(scheduler, 'intervals') as Map<string, unknown>;
+    expect(intervals.size).toBe(0);
+    // Config retained so getLatestQuota / getLatestQuotaForProvider keep working.
+    expect(scheduler.getCheckerIds()).toContain('flip-off-checker');
   });
 });
 

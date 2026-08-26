@@ -89,6 +89,14 @@ interface BackgroundExplorationConfig {
   workerConcurrency: number;
 }
 
+interface BackgroundQuotaCheckConfig {
+  enabled: boolean;
+}
+
+interface ModelMetadataAutoRefreshConfig {
+  enabled: boolean;
+}
+
 interface TimeoutConfig {
   defaultSeconds: number;
 }
@@ -117,6 +125,14 @@ const DEFAULT_BACKGROUND_EXPLORATION: BackgroundExplorationConfig = {
   enabled: false,
   stalenessThresholdSeconds: 600,
   workerConcurrency: 2,
+};
+
+const DEFAULT_BACKGROUND_QUOTA_CHECK: BackgroundQuotaCheckConfig = {
+  enabled: false,
+};
+
+const DEFAULT_MODEL_METADATA_AUTO_REFRESH: ModelMetadataAutoRefreshConfig = {
+  enabled: false,
 };
 
 const DEFAULT_COMPACTION_CONFIG: CompactionSettings = { enabled: false, strategy: 'native' };
@@ -337,6 +353,20 @@ export const Config = () => {
   const [bgStalenessInput, setBgStalenessInput] = useState('');
   const [bgConcurrencyInput, setBgConcurrencyInput] = useState('');
 
+  // Background quota check toggle (default off)
+  const [bgQuotaCheck, setBgQuotaCheck] = useState<BackgroundQuotaCheckConfig>(
+    DEFAULT_BACKGROUND_QUOTA_CHECK
+  );
+  const [bgQuotaCheckLoaded, setBgQuotaCheckLoaded] = useState(false);
+  const [bgQuotaCheckSaving, setBgQuotaCheckSaving] = useState(false);
+
+  // 60-minute model metadata auto-refresh toggle (default off)
+  const [metadataAutoRefresh, setMetadataAutoRefresh] = useState<ModelMetadataAutoRefreshConfig>(
+    DEFAULT_MODEL_METADATA_AUTO_REFRESH
+  );
+  const [metadataAutoRefreshLoaded, setMetadataAutoRefreshLoaded] = useState(false);
+  const [metadataAutoRefreshSaving, setMetadataAutoRefreshSaving] = useState(false);
+
   const validateStalenessInput = (
     raw: string
   ): { valid: boolean; value?: number; error?: string } => {
@@ -463,6 +493,60 @@ export const Config = () => {
       toast.error('Failed to load background exploration settings');
     }
   }, [toast]);
+
+  const loadBackgroundQuotaCheck = useCallback(async () => {
+    try {
+      const cfg = await api.getBackgroundQuotaCheck();
+      setBgQuotaCheck(cfg);
+      setBgQuotaCheckLoaded(true);
+    } catch (e) {
+      console.error('Failed to load background quota check settings:', e);
+      toast.error('Failed to load background quota check settings');
+    }
+  }, [toast]);
+
+  const handleToggleBackgroundQuotaCheck = async (checked: boolean) => {
+    const previous = bgQuotaCheck.enabled;
+    setBgQuotaCheck({ enabled: checked });
+    setBgQuotaCheckSaving(true);
+    try {
+      const { enabled } = await api.setBackgroundQuotaCheck({ enabled: checked });
+      setBgQuotaCheck({ enabled });
+      toast.success(`Background quota check ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      setBgQuotaCheck({ enabled: previous });
+      toast.error((e as Error).message, 'Failed to update background quota check');
+    } finally {
+      setBgQuotaCheckSaving(false);
+    }
+  };
+
+  const loadModelMetadataAutoRefresh = useCallback(async () => {
+    try {
+      const cfg = await api.getModelMetadataAutoRefresh();
+      setMetadataAutoRefresh(cfg);
+      setMetadataAutoRefreshLoaded(true);
+    } catch (e) {
+      console.error('Failed to load model metadata auto-refresh setting:', e);
+      toast.error('Failed to load model metadata auto-refresh setting');
+    }
+  }, [toast]);
+
+  const handleToggleMetadataAutoRefresh = async (checked: boolean) => {
+    const previous = metadataAutoRefresh.enabled;
+    setMetadataAutoRefresh({ enabled: checked });
+    setMetadataAutoRefreshSaving(true);
+    try {
+      const { enabled } = await api.setModelMetadataAutoRefresh({ enabled: checked });
+      setMetadataAutoRefresh({ enabled });
+      toast.success(`Model metadata auto-refresh ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      setMetadataAutoRefresh({ enabled: previous });
+      toast.error((e as Error).message, 'Failed to update model metadata auto-refresh');
+    } finally {
+      setMetadataAutoRefreshSaving(false);
+    }
+  };
 
   const loadTimeoutConfig = useCallback(async () => {
     try {
@@ -779,6 +863,8 @@ export const Config = () => {
     loadMcpOAuthConfig();
     loadExplorationRates();
     loadBackgroundExploration();
+    loadBackgroundQuotaCheck();
+    loadModelMetadataAutoRefresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1969,6 +2055,36 @@ export const Config = () => {
             </div>
           </Disclosure>
 
+          {/* ─── Background Quota Check ─────────────────────────────── */}
+          <Disclosure
+            title="Background Quota Check"
+            defaultOpen={false}
+            extra={
+              <Switch
+                checked={bgQuotaCheck.enabled}
+                onChange={handleToggleBackgroundQuotaCheck}
+                disabled={!bgQuotaCheckLoaded || bgQuotaCheckSaving}
+                aria-label="Toggle background quota check on/off"
+              />
+            }
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <RefreshCw size={16} className="text-primary" />
+                <div>
+                  <p className="font-body text-[12px] font-medium text-text">
+                    Background Quota Check
+                  </p>
+                  <p className="font-body text-[11px] text-text-muted">
+                    Periodically poll provider quota APIs in the background to keep meter snapshots
+                    fresh. Off by default — turn on to refresh quotas automatically instead of only
+                    when an end-user request triggers a check.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </Disclosure>
+
           {/* ─── Network / Trusted Proxies ──────────────────────────── */}
           <Disclosure
             title="Network Settings"
@@ -2034,10 +2150,32 @@ export const Config = () => {
               </Button>
             }
           >
-            <p className="text-sm text-text-secondary">
-              Catalog metadata for model aliases auto-refreshes every 60 minutes. Use this to
-              trigger an immediate reload from OpenRouter, models.dev, and Catwalk.
-            </p>
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <RefreshCw size={16} className="text-primary" />
+                  <div>
+                    <p className="font-body text-[12px] font-medium text-text">
+                      Auto-refresh every 60 minutes
+                    </p>
+                    <p className="font-body text-[11px] text-text-muted">
+                      Off by default. Turn on to keep catalog metadata from OpenRouter, models.dev,
+                      and Catwalk fresh automatically. You can always click "Refresh Metadata" for
+                      an immediate reload regardless of this setting.
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  checked={metadataAutoRefresh.enabled}
+                  onChange={handleToggleMetadataAutoRefresh}
+                  disabled={!metadataAutoRefreshLoaded || metadataAutoRefreshSaving}
+                  aria-label="Toggle 60-minute model metadata auto-refresh on/off"
+                />
+              </div>
+              <p className="text-sm text-text-secondary">
+                Trigger an immediate reload from OpenRouter, models.dev, and Catwalk.
+              </p>
+            </div>
           </Card>
 
           <Card title="Backup & Restore">

@@ -1773,6 +1773,14 @@ export class ConfigRepository {
     return { enabled, stalenessThresholdSeconds, workerConcurrency };
   }
 
+  async getBackgroundQuotaCheckEnabled(): Promise<boolean> {
+    return this.getSetting<boolean>('backgroundQuotaCheck.enabled', false);
+  }
+
+  async getModelMetadataAutoRefreshEnabled(): Promise<boolean> {
+    return this.getSetting<boolean>('modelMetadataAutoRefresh.enabled', false);
+  }
+
   async getMcpOAuthConfig(): Promise<McpOAuthConfig> {
     const stored = await this.getSetting<Partial<McpOAuthConfig>>('mcpOAuth', {});
     const enabled = stored?.enabled === true;
