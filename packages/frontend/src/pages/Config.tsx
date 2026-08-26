@@ -2056,19 +2056,8 @@ export const Config = () => {
           </Disclosure>
 
           {/* ─── Background Quota Check ─────────────────────────────── */}
-          <Disclosure
-            title="Background Quota Check"
-            defaultOpen={false}
-            extra={
-              <Switch
-                checked={bgQuotaCheck.enabled}
-                onChange={handleToggleBackgroundQuotaCheck}
-                disabled={!bgQuotaCheckLoaded || bgQuotaCheckSaving}
-                aria-label="Toggle background quota check on/off"
-              />
-            }
-          >
-            <div className="flex flex-col gap-3">
+          <Disclosure title="Background Quota Check" defaultOpen={false}>
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <RefreshCw size={16} className="text-primary" />
                 <div>
@@ -2082,6 +2071,12 @@ export const Config = () => {
                   </p>
                 </div>
               </div>
+              <Switch
+                checked={bgQuotaCheck.enabled}
+                onChange={handleToggleBackgroundQuotaCheck}
+                disabled={!bgQuotaCheckLoaded || bgQuotaCheckSaving}
+                aria-label="Toggle background quota check on/off"
+              />
             </div>
           </Disclosure>
 
@@ -2136,8 +2131,10 @@ export const Config = () => {
             </div>
           </Disclosure>
 
-          <Card
+          {/* ─── Model Metadata ─────────────────────────────────────── */}
+          <Disclosure
             title="Model Metadata"
+            defaultOpen={false}
             extra={
               <Button
                 variant="primary"
@@ -2150,33 +2147,28 @@ export const Config = () => {
               </Button>
             }
           >
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <RefreshCw size={16} className="text-primary" />
-                  <div>
-                    <p className="font-body text-[12px] font-medium text-text">
-                      Auto-refresh every 60 minutes
-                    </p>
-                    <p className="font-body text-[11px] text-text-muted">
-                      Off by default. Turn on to keep catalog metadata from OpenRouter, models.dev,
-                      and Catwalk fresh automatically. You can always click "Refresh Metadata" for
-                      an immediate reload regardless of this setting.
-                    </p>
-                  </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <RefreshCw size={16} className="text-primary" />
+                <div>
+                  <p className="font-body text-[12px] font-medium text-text">
+                    Auto-refresh every 60 minutes
+                  </p>
+                  <p className="font-body text-[11px] text-text-muted">
+                    Off by default. Turn on to keep catalog metadata from OpenRouter, models.dev,
+                    and Catwalk fresh automatically. You can always click "Refresh Metadata" for an
+                    immediate reload regardless of this setting.
+                  </p>
                 </div>
-                <Switch
-                  checked={metadataAutoRefresh.enabled}
-                  onChange={handleToggleMetadataAutoRefresh}
-                  disabled={!metadataAutoRefreshLoaded || metadataAutoRefreshSaving}
-                  aria-label="Toggle 60-minute model metadata auto-refresh on/off"
-                />
               </div>
-              <p className="text-sm text-text-secondary">
-                Trigger an immediate reload from OpenRouter, models.dev, and Catwalk.
-              </p>
+              <Switch
+                checked={metadataAutoRefresh.enabled}
+                onChange={handleToggleMetadataAutoRefresh}
+                disabled={!metadataAutoRefreshLoaded || metadataAutoRefreshSaving}
+                aria-label="Toggle 60-minute model metadata auto-refresh on/off"
+              />
             </div>
-          </Card>
+          </Disclosure>
 
           <Card title="Backup & Restore">
             <div className="flex items-center gap-2">
