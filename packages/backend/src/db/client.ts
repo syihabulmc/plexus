@@ -131,7 +131,16 @@ export function initializeDatabase(connectionString?: string) {
 
     if (connStr.startsWith('libsql://')) {
       // Remote Turso / libSQL server: pure-fetch Hrana client exposed through
-      // the @libsql/client-compatible API (/compat), wrapped by drizzle-orm/libsql.
+      // the @libsql/client-compatible API (/compat), wrapped by drizzle's
+      // LibSQL driver core.
+      //
+      // We deliberately bypass the `drizzle-orm/libsql` entry point: its
+      // driver.cjs unconditionally requires `@libsql/client`, whose Node entry
+      // loads platform-native bindings (@libsql/linux-x64-gnu etc.) that
+      // cannot resolve inside a `bun build --compile` single-file binary.
+      // `construct` from the public ./libsql/driver-core export is what that
+      // wrapper calls internally, takes the same (client, config) shape, and
+      // depends only on other pure-JS drizzle internals.
       const urlToken = connStr.match(/[?&]authToken=([^&]+)/)?.[1];
       const authToken =
         process.env.TURSO_AUTH_TOKEN ??
@@ -142,11 +151,13 @@ export function initializeDatabase(connectionString?: string) {
         );
       }
       const { createClient } = require('@tursodatabase/serverless/compat');
-      const { drizzle: drizzleLibSql } = require('drizzle-orm/libsql');
+      const { construct: constructLibSql } = require('drizzle-orm/libsql/driver-core') as {
+        construct: (client: unknown, config?: { schema?: unknown }) => SqliteDb;
+      };
       tursoClient = createClient({ url: connStr, authToken });
       // ponytail: every query is now one HTTPS round trip; if hot-path latency
       // hurts, upgrade to an embedded replica (@tursodatabase/database sync).
-      dbInstance = drizzleLibSql(tursoClient, { schema });
+      dbInstance = constructLibSql(tursoClient, { schema });
       logger.silly(
         `Connecting to Turso: ${connStr.replace(/[?&]authToken=[^&]+/, '?authToken=***')}`
       );
