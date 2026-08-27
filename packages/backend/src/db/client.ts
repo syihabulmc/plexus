@@ -37,15 +37,16 @@ export function parseConnectionString(uri: string): {
       connStr = ':memory:';
     }
     return { dialect: 'sqlite', connectionString: connStr };
-  } else if (uri.startsWith('libsql://')) {
+  } else if (uri.startsWith('libsql://') || uri.startsWith('turso://')) {
     // Turso Cloud / libSQL remote server — still the SQLite dialect, reached
     // over Hrana HTTP via @tursodatabase/serverless/compat (see below).
+    // `turso://` is the newer official scheme accepted by that driver.
     return { dialect: 'sqlite', connectionString: uri };
   } else if (uri.startsWith('postgres://') || uri.startsWith('postgresql://')) {
     return { dialect: 'postgres', connectionString: uri };
   }
   throw new Error(
-    `Invalid database URI: must start with sqlite://, libsql:// or postgres://. Got: ${uri}`
+    `Invalid database URI: must start with sqlite://, libsql://, turso:// or postgres://. Got: ${uri}`
   );
 }
 
@@ -129,7 +130,7 @@ export function initializeDatabase(connectionString?: string) {
       customCheckers,
     };
 
-    if (connStr.startsWith('libsql://')) {
+    if (connStr.startsWith('libsql://') || connStr.startsWith('turso://')) {
       // Remote Turso / libSQL server: pure-fetch Hrana client exposed through
       // the @libsql/client-compatible API (/compat), wrapped by drizzle's
       // LibSQL driver core.

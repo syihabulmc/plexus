@@ -20,6 +20,13 @@ describe('parseConnectionString', () => {
     });
   });
 
+  it('parses turso:// the same as libsql://', () => {
+    expect(parseConnectionString('turso://plexus-us-syihab.aws-us-west-2.turso.io')).toEqual({
+      dialect: 'sqlite',
+      connectionString: 'turso://plexus-us-syihab.aws-us-west-2.turso.io',
+    });
+  });
+
   it('still rejects unknown schemes and mentions libsql in the error', () => {
     expect(() => parseConnectionString('mysql://localhost/db')).toThrow('libsql://');
   });
