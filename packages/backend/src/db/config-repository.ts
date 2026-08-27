@@ -363,25 +363,34 @@ export class ConfigRepository {
   async getAllProviders(): Promise<Record<string, ProviderConfig>> {
     const schema = this.schema();
     const rows = await this.db().select().from(schema.providers);
+    if (rows.length === 0) return {};
+
+    // Avoid N+1: one query each for all models and OAuth credentials
+    // ponytail: full-table model scan; switch to inArray batching only if model count becomes huge
+    const [allModels, creds] = await Promise.all([
+      this.db().select().from(schema.providerModels).orderBy(schema.providerModels.sortOrder),
+      this.db()
+        .select({ id: schema.oauthCredentials.id, accountId: schema.oauthCredentials.accountId })
+        .from(schema.oauthCredentials),
+    ]);
+
+    const modelsByProvider = new Map<number, any[]>();
+    for (const m of allModels as any[]) {
+      const list = modelsByProvider.get(m.providerId);
+      if (list) list.push(m);
+      else modelsByProvider.set(m.providerId, [m]);
+    }
+    const accountById = new Map(
+      (creds as Array<{ id: number; accountId: string }>).map((c) => [c.id, c.accountId])
+    );
+
     const result: Record<string, ProviderConfig> = {};
-
     for (const row of rows) {
-      const models = await this.db()
-        .select()
-        .from(schema.providerModels)
-        .where(eq(schema.providerModels.providerId, row.id))
-        .orderBy(schema.providerModels.sortOrder);
-
-      let oauthAccountId: string | undefined;
-      if (row.oauthCredentialId) {
-        const creds = await this.db()
-          .select({ accountId: schema.oauthCredentials.accountId })
-          .from(schema.oauthCredentials)
-          .where(eq(schema.oauthCredentials.id, row.oauthCredentialId))
-          .limit(1);
-        if (creds.length > 0) oauthAccountId = creds[0]!.accountId;
-      }
-      result[row.slug] = this.rowToProviderConfig(row, models, oauthAccountId);
+      result[row.slug] = this.rowToProviderConfig(
+        row,
+        modelsByProvider.get((row as any).id) ?? [],
+        (row as any).oauthCredentialId ? accountById.get((row as any).oauthCredentialId) : undefined
+      );
     }
 
     return result;

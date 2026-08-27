@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, Provider, OAuthSession, OAuthProviderInfo, fetchQuotaCheckers } from '../lib/api';
 import type { QuotaCheckerInfo } from '../types/quota';
@@ -100,7 +100,10 @@ export function useProviderForm() {
   // pi-ai ships — new provider flows (e.g. xAI, Kimi Code, OpenRouter) show
   // up here automatically with no frontend change.
   const [oauthProviders, setOauthProviders] = useState<OAuthProviderInfo[]>([]);
-  const OAUTH_PROVIDERS = oauthProviders.map((p) => ({ value: p.id, label: p.name }));
+  const OAUTH_PROVIDERS = useMemo(
+    () => oauthProviders.map((p) => ({ value: p.id, label: p.name })),
+    [oauthProviders]
+  );
   const [customCheckerIds, setCustomCheckerIds] = useState<string[]>([]);
   const [quotas, setQuotas] = useState<QuotaCheckerInfo[]>([]);
   const [quotasLoading, setQuotasLoading] = useState(true);
@@ -213,7 +216,11 @@ export function useProviderForm() {
   const loadData = async () => {
     try {
       const p = await api.getProviders();
-      setProviders(p);
+      // Skip re-render when the payload is unchanged (10s poll against a
+      // quiet backend would otherwise re-sort and re-render the whole list)
+      setProviders((prev) =>
+        prev.length === p.length && JSON.stringify(prev) === JSON.stringify(p) ? prev : p
+      );
     } catch (e) {
       console.error('Failed to load data', e);
     }
@@ -221,7 +228,9 @@ export function useProviderForm() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 10000);
+    const interval = setInterval(() => {
+      if (!document.hidden) loadData();
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -879,7 +888,10 @@ export function useProviderForm() {
     return <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>{badges}</div>;
   };
 
-  const sortedProviders = [...providers].sort((a, b) => a.id.localeCompare(b.id));
+  const sortedProviders = useMemo(
+    () => [...providers].sort((a, b) => a.id.localeCompare(b.id)),
+    [providers]
+  );
   const quotaValidationError = validateQuotaChecker();
 
   return {

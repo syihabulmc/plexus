@@ -16,9 +16,7 @@ describe('initializeDatabase with libsql:// (Turso)', () => {
   });
 
   it('fails fast when TURSO_AUTH_TOKEN is absent and the URL carries none', () => {
-    expect(() => initializeDatabase('libsql://plexus-myorg.turso.io')).toThrow(
-      'TURSO_AUTH_TOKEN'
-    );
+    expect(() => initializeDatabase('libsql://plexus-myorg.turso.io')).toThrow('TURSO_AUTH_TOKEN');
   });
 
   it('builds a drizzle sqlite instance off TURSO_AUTH_TOKEN without dialing out', () => {

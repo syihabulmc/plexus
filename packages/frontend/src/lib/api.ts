@@ -1318,6 +1318,23 @@ function aliasToConfigPayload(alias: Alias): Record<string, unknown> {
   };
 }
 
+// Short-lived dedupe so concurrent callers of GET /providers
+// (getProviders + getAliases + getModels, fired together by page loads and
+// poll ticks) share a single round-trip instead of three.
+let providersCache: { at: number; data: Record<string, any> } | null = null;
+const PROVIDERS_DEDUPE_MS = 3000;
+
+async function fetchProvidersRaw(): Promise<Record<string, any>> {
+  if (providersCache && Date.now() - providersCache.at < PROVIDERS_DEDUPE_MS) {
+    return providersCache.data;
+  }
+  const res = await fetchWithAuth(`${API_BASE}/v0/management/providers`);
+  if (!res.ok) throw new Error('Failed to fetch providers');
+  const data = (await res.json()) as Record<string, any>;
+  providersCache = { at: Date.now(), data };
+  return data;
+}
+
 export const api = {
   getCooldowns: async (): Promise<Cooldown[]> => {
     try {
@@ -1824,9 +1841,7 @@ export const api = {
 
   getProviders: async (): Promise<Provider[]> => {
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v0/management/providers`);
-      if (!res.ok) throw new Error('Failed to fetch providers');
-      const providers = (await res.json()) as Record<string, any>;
+      const providers = await fetchProvidersRaw();
 
       return Object.entries(providers).map(([key, val]) => {
         // Normalize models array format to object format
@@ -2081,9 +2096,7 @@ export const api = {
 
   getModels: async (): Promise<Model[]> => {
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v0/management/providers`);
-      if (!res.ok) throw new Error('Failed to fetch providers');
-      const providers = (await res.json()) as Record<string, any>;
+      const providers = await fetchProvidersRaw();
       const models: Model[] = [];
 
       // Extract models from providers
@@ -2119,15 +2132,13 @@ export const api = {
 
   getAliases: async (): Promise<Alias[]> => {
     try {
-      const [aliasRes, providerRes] = await Promise.all([
-        fetchWithAuth(`${API_BASE}/v0/management/aliases`),
-        fetchWithAuth(`${API_BASE}/v0/management/providers`),
-      ]);
+      const aliasRes = await fetchWithAuth(`${API_BASE}/v0/management/aliases`);
       if (!aliasRes.ok) throw new Error('Failed to fetch aliases');
-      if (!providerRes.ok) throw new Error('Failed to fetch providers');
 
-      const aliasMap = (await aliasRes.json()) as Record<string, any>;
-      const providers = (await providerRes.json()) as Record<string, any>;
+      const [aliasMap, providers] = (await Promise.all([aliasRes.json(), fetchProvidersRaw()])) as [
+        Record<string, any>,
+        Record<string, any>,
+      ];
       const aliases: Alias[] = [];
 
       Object.entries(aliasMap).forEach(([key, val]) => {

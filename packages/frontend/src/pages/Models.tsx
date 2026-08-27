@@ -218,10 +218,14 @@ export const Models = () => {
     [setEditingAlias]
   );
 
-  const aliasesByType = MODEL_TYPE_GROUPS.map((group) => ({
-    group,
-    aliases: visibleAliases.filter((a) => (a.type ?? 'text') === group.type),
-  }));
+  const aliasesByType = useMemo(
+    () =>
+      MODEL_TYPE_GROUPS.map((group) => ({
+        group,
+        aliases: visibleAliases.filter((a) => (a.type ?? 'text') === group.type),
+      })),
+    [visibleAliases]
+  );
 
   const hasActiveFilters = search.trim().length > 0 || selectedProviderFilters.length > 0;
   const emptyStateMessage =

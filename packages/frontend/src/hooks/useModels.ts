@@ -1,5 +1,5 @@
 import Fuse from 'fuse.js';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api, Alias, Provider, Model, Cooldown } from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 
@@ -218,7 +218,9 @@ export const useModels = () => {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 10000);
+    const interval = setInterval(() => {
+      if (!document.hidden) loadData();
+    }, 10000);
     return () => clearInterval(interval);
   }, [loadData]);
 
@@ -376,7 +378,10 @@ export const useModels = () => {
     }));
   };
 
-  const filteredAliases = aliases.filter((a) => a.id.toLowerCase().includes(search.toLowerCase()));
+  const filteredAliases = useMemo(
+    () => aliases.filter((a) => a.id.toLowerCase().includes(search.toLowerCase())),
+    [aliases, search]
+  );
 
   const handleOpenImport = useCallback(() => {
     const covered = new Set<string>();
