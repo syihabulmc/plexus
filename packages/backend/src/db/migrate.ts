@@ -358,7 +358,11 @@ export async function runMigrations() {
         sql: m.sql.map(toIdempotentSQLiteStatement),
       }));
       try {
-        (db as any).dialect.migrate(idempotentMigrations, (db as any).session, {
+        // MUST be awaited: for libsql:// connections the dialect is the async one
+        // (SQLiteAsyncDialect over Hrana HTTP), so a fire-and-forget call would
+        // let startup proceed to post-migration queries while DDL is still in
+        // flight — observed as "no such table" crash-loops in containers.
+        await (db as any).dialect.migrate(idempotentMigrations, (db as any).session, {
           migrationsFolder: '',
         });
       } catch (error: any) {
@@ -371,7 +375,7 @@ export async function runMigrations() {
           }
           if (repaired) {
             logger.warn('Retrying SQLite migrations after drift repair');
-            (db as any).dialect.migrate(idempotentMigrations, (db as any).session, {
+            await (db as any).dialect.migrate(idempotentMigrations, (db as any).session, {
               migrationsFolder: '',
             });
           } else {
