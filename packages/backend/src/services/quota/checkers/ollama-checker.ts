@@ -2,116 +2,127 @@ import { defineChecker } from '../checker-registry';
 import { z } from 'zod';
 import { logger } from '../../../utils/logger';
 
-function extractUsage(html: string, label: string): { percent: number; resetsAt?: string } | null {
-  // Primary: use aria-label (e.g. 'Session usage 4.4% used') — most robust against HTML changes
-  const ariaPattern = new RegExp(`aria-label="${label} ([\\d.]+)% used"`);
-  const ariaMatch = html.match(ariaPattern);
-  if (ariaMatch) {
-    const percent = parseFloat(ariaMatch[1]!);
-    // data-time is on a sibling element after the usage meter, search the broader area
-    const labelIndex = html.indexOf(label);
-    const resetMatch =
-      labelIndex !== -1
-        ? html.slice(labelIndex, labelIndex + 3000).match(/data-time="([^"]+)"/)
-        : null;
-    const resetsAt = resetMatch ? new Date(resetMatch[1]!).toISOString() : undefined;
+const USAGE_ENDPOINT = 'https://ollama.com/api/usage';
+const ME_ENDPOINT = 'https://ollama.com/api/me';
 
-    logger.silly(`${label}: ${percent}% (aria-label), resets at ${resetsAt}`);
-    return { percent, resetsAt };
-  }
-
-  // Fallback: find label text, then look for style="width: X%" in a wider window
-  const labelIndex = html.indexOf(label);
-  if (labelIndex === -1) {
-    logger.debug(`Label "${label}" not found in HTML`);
-    return null;
-  }
-
-  const snippet = html.slice(labelIndex, labelIndex + 2000);
-  const percentMatch = snippet.match(/style="width:\s*([\d.]+)%/);
-  if (!percentMatch) {
-    logger.debug(`Could not extract usage percent for ${label}`);
-    return null;
-  }
-
-  const percent = parseFloat(percentMatch[1]!);
-  const resetMatch = snippet.match(/data-time="([^"]+)"/);
-  const resetsAt = resetMatch ? new Date(resetMatch[1]!).toISOString() : undefined;
-
-  logger.silly(`${label}: ${percent}% (style), resets at ${resetsAt}`);
-  return { percent, resetsAt };
+interface OllamaUsageResponse {
+  limits?: {
+    session?: { usage?: number };
+    weekly?: { usage?: number };
+  };
 }
 
+interface OllamaMeResponse {
+  Plan?: string;
+}
+
+function ratioPct(ratio: number): number {
+  const r = Math.max(0, Math.min(1, ratio));
+  return Math.round(r * 100);
+}
+
+function capitalize(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+/**
+ * Ollama Cloud quota tracker. Port of 9router's `getOllamaUsage`
+ * (open-sse/services/usage/misc.js:37) into the Plexus `defineChecker`
+ * shape. The API key is read from `options.apiKey` — injected by
+ * `config-service.ts:602-606` from the stored provider-key record so the
+ * user never has to paste a `__Secure-session` cookie.
+ */
 export default defineChecker({
   type: 'ollama',
   displayName: 'Ollama',
   optionsSchema: z.object({
-    sessionCookie: z.string().min(1, 'Ollama session cookie is required'),
+    apiKey: z.string().trim().min(1, 'Ollama API key is required'),
     endpoint: z.string().url().optional(),
   }),
   async check(ctx) {
-    const sessionCookie = ctx.requireOption<string>('sessionCookie');
-    const endpoint = ctx.getOption<string>('endpoint', 'https://ollama.com/settings');
+    const apiKey = ctx.requireOption<string>('apiKey').trim();
+    const endpoint = ctx.getOption<string>('endpoint', USAGE_ENDPOINT);
 
-    logger.debug(`Fetching ${endpoint}`);
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-        Accept: 'text/html',
-        'Accept-Language': 'en-US,en;q=0.9',
-        Cookie: `__Secure-session=${sessionCookie}`,
-      },
-    });
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+    };
 
-    if (!response.ok) {
-      if (response.status === 303 || response.url.includes('/signin')) {
-        throw new Error('Authentication failed. The session cookie may be expired or invalid.');
-      }
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    logger.debug(`Calling ${endpoint}`);
+    const usageResponse = await fetch(endpoint, { method: 'GET', headers });
+    if (usageResponse.status === 401 || usageResponse.status === 403) {
+      throw new Error('Ollama Cloud API key invalid or expired.');
+    }
+    if (!usageResponse.ok) {
+      throw new Error(`Ollama Cloud usage API error (${usageResponse.status}).`);
     }
 
-    const html = await response.text();
+    let data: OllamaUsageResponse;
+    try {
+      data = (await usageResponse.json()) as OllamaUsageResponse;
+    } catch {
+      throw new Error('Ollama Cloud usage response was not JSON.');
+    }
+
+    // /api/me is best-effort — a failure here must not block quota tracking.
+    let plan = 'Ollama Cloud';
+    try {
+      const meResponse = await fetch(ME_ENDPOINT, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Length': '0' },
+      });
+      if (meResponse.ok) {
+        const me = (await meResponse.json()) as OllamaMeResponse;
+        if (typeof me?.Plan === 'string' && me.Plan.length > 0) {
+          plan = capitalize(me.Plan);
+        }
+      }
+    } catch {
+      // swallow — keep the default plan label
+    }
+
+    const limits = data?.limits ?? {};
+    const sessionRaw = limits.session?.usage;
+    const weeklyRaw = limits.weekly?.usage;
     const meters = [];
 
-    const sessionUsage = extractUsage(html, 'Session usage');
-    if (sessionUsage) {
+    if (typeof sessionRaw === 'number' && Number.isFinite(sessionRaw)) {
+      const used = ratioPct(sessionRaw);
       meters.push(
         ctx.allowance({
           key: 'session',
           label: 'Session usage',
           unit: 'percentage',
-          used: sessionUsage.percent,
-          remaining: 100 - sessionUsage.percent,
+          used,
+          remaining: 100 - used,
           periodValue: 5,
           periodUnit: 'hour',
           periodCycle: 'rolling',
-          resetsAt: sessionUsage.resetsAt,
         })
       );
     }
-
-    const weeklyUsage = extractUsage(html, 'Weekly usage');
-    if (weeklyUsage) {
+    if (typeof weeklyRaw === 'number' && Number.isFinite(weeklyRaw)) {
+      const used = ratioPct(weeklyRaw);
       meters.push(
         ctx.allowance({
           key: 'weekly',
           label: 'Weekly usage',
           unit: 'percentage',
-          used: weeklyUsage.percent,
-          remaining: 100 - weeklyUsage.percent,
+          used,
+          remaining: 100 - used,
           periodValue: 7,
           periodUnit: 'day',
           periodCycle: 'rolling',
-          resetsAt: weeklyUsage.resetsAt,
         })
       );
     }
 
-    if (meters.length === 0)
-      throw new Error('Could not parse usage data from Ollama settings page');
+    if (meters.length === 0) {
+      throw new Error('No usage limits reported.');
+    }
 
+    logger.debug(`Ollama plan=${plan}, ${meters.length} meter(s)`);
     return meters;
   },
 });
