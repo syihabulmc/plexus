@@ -48,7 +48,7 @@ const QUOTA_CONFIG_MAP: Record<
     onChange: (options: Record<string, unknown>) => void;
   }>
 > = {
-  naga: NagaQuotaConfig,
+  tokenrouter: NagaQuotaConfig,
   synthetic: SyntheticQuotaConfig,
   nanogpt: NanoGPTQuotaConfig,
   zai: ZAIQuotaConfig,
