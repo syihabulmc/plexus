@@ -181,7 +181,7 @@ export const AliasTableRow: React.FC<AliasTableRowProps> = ({
                   const testState = testStates[testKey];
 
                   const cooldown = cooldowns.find(
-                    (c) => c.provider === t.provider && c.model === t.model && !c.accountId
+                    (c) => c.provider === t.provider && c.model === t.model && !c.keyId
                   );
                   const isCoolingDown = !!cooldown;
                   const cooldownDisplay = cooldown

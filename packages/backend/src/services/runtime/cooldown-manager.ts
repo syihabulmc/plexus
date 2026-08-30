@@ -471,6 +471,43 @@ export class CooldownManager {
     }
   }
 
+  public async clearKeyCooldown(
+    provider: string,
+    model: string,
+    keyId: string
+  ): Promise<void> {
+    if (!keyId) {
+      // Defensive: a missing keyId is a no-op here, not a model-level
+      // cascade. Use `clearCooldown(provider, model)` for the model-level
+      // slot.
+      return;
+    }
+    const targetKey = CooldownManager.makeCooldownKey(provider, model, keyId);
+    const existed = this.cooldowns.delete(targetKey);
+    if (existed) {
+      logger.info(
+        `Manually cleared per-key cooldown for provider '${provider}' model '${model}' key '${keyId}'`
+      );
+    }
+    try {
+      const db = this.ensureDb();
+      await db
+        .delete(this.schema.providerCooldowns)
+        .where(
+          and(
+            eq(this.schema.providerCooldowns.provider, provider),
+            eq(this.schema.providerCooldowns.model, model),
+            eq(this.schema.providerCooldowns.keyId, keyId)
+          )
+        );
+    } catch (e) {
+      logger.error(
+        `Failed to delete per-key cooldown for ${provider}:${model}:${keyId}`,
+        e
+      );
+    }
+  }
+
   public async clearCooldown(provider?: string, model?: string): Promise<void> {
     if (provider && model) {
       // Per-key cooldowns (3-segment key like `${provider}:${model}:${keyId}`)

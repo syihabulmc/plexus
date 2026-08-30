@@ -665,37 +665,6 @@ export class Dispatcher {
   /**
    * Handles failed provider responses with cooldown logic
    */
-  /**
-   * Detects whether an error response body indicates a quota/funds exhaustion error.
-   * These patterns should trigger a cooldown even on 400/403 responses.
-   */
-  private isQuotaExhaustedError(errorText: string): boolean {
-    const lower = errorText.toLowerCase();
-    return (
-      lower.includes('insufficient fund') ||
-      lower.includes('insufficient_quota') ||
-      lower.includes('insufficient balance') ||
-      lower.includes('insufficient_balance') ||
-      lower.includes('quota exceeded') ||
-      lower.includes('out of credits') ||
-      lower.includes('credit balance is too low') ||
-      lower.includes('credit_balance_too_low') ||
-      lower.includes('account is out of credits') ||
-      lower.includes('used up your points') ||
-      lower.includes('usage limit') ||
-      lower.includes('free plan') ||
-      lower.includes('your credit balance') ||
-      lower.includes('remaining quota') ||
-      lower.includes('payment required') ||
-      lower.includes('billing') ||
-      lower.includes('no credits') ||
-      lower.includes('topup') ||
-      lower.includes('top up') ||
-      lower.includes('top_up') ||
-      lower.includes('rate limit') ||
-      lower.includes('rate_limit')
-    );
-  }
 
   private async handleProviderError(
     response: Response,
@@ -770,8 +739,14 @@ export class Dispatcher {
         }
       }
 
-      // Mark provider+model as failed with optional duration
-      // For non-429 errors, cooldownDuration will be undefined and default (10 minutes) will be used
+      // Per-key cooldown. Passing route.selectedKeyId (already stamped by
+      // setupProviderHeaders) writes the 3-segment `${provider}:${model}:${keyId}`
+      // slot that selectProviderKey consults, instead of the shared model-level
+      // slot. Without this, one key's 429/5xx would lock out the entire provider
+      // (admitProvider / filterHealthyTargets read the model-level slot with no
+      // keyId) and per-key successes cannot clear it. When the provider has no
+      // `api_keys` configured, selectedKeyId is undefined and the slot
+      // degenerates to the legacy model-level behavior.
       cooldownManager.markProviderFailure(
         route.provider,
         route.model,
@@ -779,7 +754,8 @@ export class Dispatcher {
         this.formatFailureReason(
           { routingContext: { providerResponse: errorText, statusCode: response.status } },
           true
-        )
+        ),
+        route.selectedKeyId
       );
     }
 

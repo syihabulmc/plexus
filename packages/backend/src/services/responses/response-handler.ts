@@ -114,6 +114,9 @@ export async function handleResponse(
   // on the legacy single api_key path; the Logs UI renders null as
   // 'default'.
   usageRecord.selectedKeyLabel = unifiedResponse.plexus?.selectedKeyLabel ?? null;
+  // Per-key id. Used by the mid-stream stall path below so a stall on one
+  // key does not poison the model-level cooldown slot shared by all keys.
+  usageRecord.selectedKeyId = unifiedResponse.plexus?.selectedKeyId ?? null;
 
   // Set provider info for debug logging filter
   if (usageRecord.provider) {
@@ -548,10 +551,15 @@ export async function handleResponse(
       if (isStall) {
         usageRecord.responseStatus = 'stall';
         if (usageRecord.provider && usageRecord.selectedModelName) {
+          // Per-key stall cooldown: threading selectedKeyId isolates the
+          // stall to the failing key and leaves sibling keys healthy.
+          // Falls back to the model-level slot when no keyId is in scope
+          // (legacy single api_key path).
           CooldownManager.getInstance().markProviderStallFailure(
             usageRecord.provider,
             usageRecord.selectedModelName,
-            abortController?.signal?.reason?.message || 'Stream stalled'
+            abortController?.signal?.reason?.message || 'Stream stalled',
+            usageRecord.selectedKeyId ?? undefined
           );
         }
       } else if (isTimeout) {

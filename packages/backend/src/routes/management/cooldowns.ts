@@ -24,11 +24,25 @@ export async function registerCooldownRoutes(fastify: FastifyInstance) {
   fastify.delete(
     '/v0/management/cooldowns/:provider',
     { preHandler: requireAdmin },
-    (request, reply) => {
+    async (request, reply) => {
       const params = request.params as any;
       const query = request.query as any;
       const provider = params.provider as string;
       const model = query.model as string | undefined;
+      const keyId = query.keyId as string | undefined;
+
+      // Per-key clear: only the matching per-key slot is removed. This
+      // is what the Cooldowns UI invokes for a per-row X button on a
+      // per-key entry — model-level siblings are intentionally left in
+      // place so an admin clearing one stale key does not silently
+      // wipe the entire model's circuit-breaker state.
+      if (keyId && model) {
+        logger.info(
+          `[AUDIT] admin cleared per-key cooldown for provider='${provider}' model='${model}' key='${keyId}'`
+        );
+        await CooldownManager.getInstance().clearKeyCooldown(provider, model, keyId);
+        return reply.send({ success: true });
+      }
 
       logger.info(
         `[AUDIT] admin cleared cooldown for provider='${provider}' model='${model ?? '*'}'`

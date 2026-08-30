@@ -300,8 +300,15 @@ export class RequestManager {
         // Only call it here for network/transport errors that have no HTTP status code.
         const isHttpError = effectiveError?.routingContext?.statusCode !== undefined;
         const isUpstreamTimeout = effectiveError?.routingContext?.code === 'upstream_timeout';
+        // ALL_KEYS_UNAVAILABLE is thrown by setupProviderHeaders before
+        // selectedKeyId is stamped; it carries a stable code so callers
+        // can recognize "this is a consequence of existing cooldown state,
+        // not a new failure" and skip extending it. Without this guard
+        // every dispatch against a fully-cooled multi-key provider would
+        // re-mark the model-level slot and re-extend the poison.
+        const isAllKeysUnavailable = effectiveError?.code === 'ALL_KEYS_UNAVAILABLE';
 
-        if (!isHttpError || isUpstreamTimeout) {
+        if ((!isHttpError || isUpstreamTimeout) && !isAllKeysUnavailable) {
           // Pure network/transport error — mark the provider as failed
           if (effectiveError.message?.includes('stalled')) {
             CooldownManager.getInstance().markProviderStallFailure(

@@ -183,7 +183,7 @@ export const AliasMobileCard: React.FC<Props> = ({
                 const testKey = `${alias.id}-${i}`;
                 const testState = testStates[testKey];
                 const cooldown = cooldowns.find(
-                  (c) => c.provider === t.provider && c.model === t.model && !c.accountId
+                  (c) => c.provider === t.provider && c.model === t.model && !c.keyId
                 );
                 const cooldownText = cooldown
                   ? formatMsToMinSec(cooldown.timeRemainingMs, cooldown.lastError)

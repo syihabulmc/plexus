@@ -22,6 +22,11 @@ export interface UsageRecord {
   // legacy single api_key path. Used by the Logs page and Dashboard to
   // attribute each request to a specific API key.
   selectedKeyLabel?: string | null;
+  // Per-key id of the selected provider key. Mirrors selectedKeyLabel but
+  // carries the stable id (not the human-readable label). Used by the
+  // stall-cooldown path in response-handler.ts so a per-key failure does
+  // not poison sibling keys of the same provider.
+  selectedKeyId?: string | null;
   tokensInput: number | null;
   tokensOutput: number | null;
   tokensReasoning: number | null;

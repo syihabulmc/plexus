@@ -553,7 +553,10 @@ export interface InferenceError {
 export interface Cooldown {
   provider: string;
   model: string;
-  accountId?: string | null;
+  // Per-key id when the entry is keyed on a specific API key
+  // (multi-key provider with one key on cooldown). Undefined for the
+  // legacy model-level / single-key slot.
+  keyId?: string | null;
   expiry: number;
   timeRemainingMs: number;
   consecutiveFailures?: number;
@@ -1372,13 +1375,19 @@ export const api = {
     }
   },
 
-  clearCooldown: async (provider?: string, model?: string): Promise<void> => {
+  clearCooldown: async (
+    provider?: string,
+    model?: string,
+    keyId?: string
+  ): Promise<void> => {
     let url: string;
     if (provider) {
       url = `${API_BASE}/v0/management/cooldowns/${provider}`;
-      if (model) {
-        url += `?model=${encodeURIComponent(model)}`;
-      }
+      const params = new URLSearchParams();
+      if (model) params.set('model', model);
+      if (keyId) params.set('keyId', keyId);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
     } else {
       url = `${API_BASE}/v0/management/cooldowns`;
     }

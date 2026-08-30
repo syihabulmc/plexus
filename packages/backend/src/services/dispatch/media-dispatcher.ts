@@ -855,7 +855,8 @@ export class MediaDispatcher {
                 route.provider,
                 route.model,
                 (error as any).cooldownDuration,
-                error.message
+                error.message,
+                route.selectedKeyId
               );
             }
 

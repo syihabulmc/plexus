@@ -45,7 +45,7 @@ export const ServiceAlertsCard: React.FC<ServiceAlertsCardProps> = ({ cooldowns,
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {Object.entries(groupedCooldowns).map(([key, modelCooldowns]) => {
           const [provider, model] = key.split(':');
-          const hasAccountId = modelCooldowns.some((c) => c.accountId);
+          const hasPerKey = modelCooldowns.some((c) => c.keyId);
           const maxTime = Math.max(...modelCooldowns.map((c) => c.timeRemainingMs));
           const representative = modelCooldowns.reduce((a, b) =>
             a.timeRemainingMs >= b.timeRemainingMs ? a : b
@@ -57,10 +57,10 @@ export const ServiceAlertsCard: React.FC<ServiceAlertsCardProps> = ({ cooldowns,
           let statusText: string;
           const modelDisplay = model || 'all models';
 
-          if (hasAccountId && modelCooldowns.length > 1) {
-            statusText = `${modelDisplay} has ${modelCooldowns.length} accounts on cooldown${prep}up to ${timeDisplay}`;
-          } else if (hasAccountId && modelCooldowns.length === 1) {
-            statusText = `${modelDisplay} has 1 account on cooldown${prep}${timeDisplay}`;
+          if (hasPerKey && modelCooldowns.length > 1) {
+            statusText = `${modelDisplay} has ${modelCooldowns.length} keys on cooldown${prep}up to ${timeDisplay}`;
+          } else if (hasPerKey && modelCooldowns.length === 1) {
+            statusText = `${modelDisplay} has 1 key on cooldown${prep}${timeDisplay}`;
           } else {
             statusText = `${modelDisplay} is on cooldown${prep}${timeDisplay}`;
           }

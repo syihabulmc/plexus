@@ -122,6 +122,45 @@ describe('Dispatcher Quota Error Detection', () => {
     expect(isHealthy).toBe(false);
   });
 
+  test('cooldowns a failed provider key without blocking its other keys', async () => {
+    setConfigForTesting({
+      ...makeConfig(),
+      providers: {
+        ...makeConfig().providers,
+        p1: {
+          ...makeConfig().providers.p1,
+          api_keys: [
+            { id: 'key-a', api_key: 'test-key-a', priority: 1 },
+            { id: 'key-b', api_key: 'test-key-b', priority: 2 },
+          ],
+        },
+      },
+    });
+
+    fetchMock
+      .mockImplementationOnce(async () => errorResponse(429, 'rate limit exceeded'))
+      .mockImplementationOnce(async () => successChatResponse('model-1'));
+
+    const dispatcher = new Dispatcher();
+    const response = await dispatcher.dispatch(makeChatRequest());
+    const meta = (response as any).plexus;
+
+    expect(meta?.attemptCount).toBe(2);
+    expect(meta?.finalAttemptProvider).toBe('p1');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer test-key-a',
+    });
+    expect((fetchMock.mock.calls[1]![1] as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer test-key-b',
+    });
+
+    const cooldownManager = CooldownManager.getInstance();
+    expect(await cooldownManager.isProviderHealthy('p1', 'model-1', 'key-a')).toBe(false);
+    expect(await cooldownManager.isProviderHealthy('p1', 'model-1', 'key-b')).toBe(true);
+    expect(await cooldownManager.isProviderHealthy('p1', 'model-1')).toBe(true);
+  });
+
   test('400 with "credit balance is too low" triggers cooldown (POE pattern)', async () => {
     fetchMock
       .mockImplementationOnce(async () =>
