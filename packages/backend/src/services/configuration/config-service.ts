@@ -643,7 +643,13 @@ export class ConfigService {
       // apiKey (and optional managementKey for OpenRouter-style checkers)
       // so quota usage and cooldown are tracked per key.
       const apiKeys = (providerConfig as any).api_keys as
-        | Array<{ id: string; api_key: string; enabled?: boolean; management_key?: string }>
+        | Array<{
+            id: string;
+            api_key: string;
+            enabled?: boolean;
+            management_key?: string;
+            label?: string;
+          }>
         | undefined;
       if (apiKeys && apiKeys.length > 0) {
         for (const keyConfig of apiKeys) {
@@ -680,6 +686,11 @@ export class ConfigService {
             id: keyCheckerId,
             provider: providerId,
             keyId: keyConfig.id,
+            // Human label propagated to the Quotas UI so per-key rows
+            // render as "Provider - Label" instead of "Provider - <UUID>".
+            // Mirrors the same field on the file-based
+            // buildProviderQuotaConfigs in config.ts.
+            keyLabel: keyConfig.label,
             type: quotaChecker.type,
             enabled: true,
             intervalMinutes: quotaChecker.intervalMinutes,
