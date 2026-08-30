@@ -255,6 +255,23 @@ export interface Provider {
   };
 }
 
+/**
+ * A single API key configured for a provider. Mirrors the backend
+ * `ProviderKeyConfig` shape exposed by `/v0/management/provider-keys`.
+ * The `api_key` value on the wire is already decrypted — keep it
+ * out of long-lived browser storage.
+ */
+export interface ProviderKey {
+  id: string;
+  provider_id: string;
+  label: string;
+  api_key: string;
+  management_key?: string;
+  notes?: string;
+  enabled: boolean;
+  priority: number;
+}
+
 export type McpServer = RemoteMcpServer | LocalMcpServer;
 
 export interface RemoteMcpServer {
@@ -561,6 +578,12 @@ export interface UsageRecord {
   allAttemptedProviders?: string | null;
   outgoingApiType?: string;
   reasoningEffort?: string | null;
+  /**
+   * Per-key label of the selected provider key. Renders as the second
+   * part of the model column (`provider:keyLabel`). Empty for legacy
+   * single api_key providers (Logs page renders empty as 'default').
+   */
+  selectedKeyLabel?: string | null;
   tokensInput?: number;
   tokensOutput?: number;
   tokensReasoning?: number;
@@ -829,6 +852,7 @@ const USAGE_PAGE_FIELDS: UsageRecordField[] = [
   'incomingModelAlias',
   'provider',
   'apiKey',
+  'selectedKeyLabel',
 ];
 
 const normalizeNow = (): Date => {
@@ -2033,6 +2057,69 @@ export const api = {
       return await response.json();
     } catch (e) {
       console.error('API Error deleteProvider', e);
+      throw e;
+    }
+  },
+
+  getProviderKeys: async (providerId?: string): Promise<{ keys: ProviderKey[] }> => {
+    try {
+      const q = providerId ? `?provider_id=${encodeURIComponent(providerId)}` : '';
+      const res = await fetchWithAuth(`${API_BASE}/v0/management/provider-keys${q}`);
+      if (!res.ok) throw new Error('Failed to fetch provider keys');
+      return await res.json();
+    } catch (e) {
+      console.error('API Error getProviderKeys', e);
+      throw e;
+    }
+  },
+
+  saveProviderKey: async (
+    payload: Partial<ProviderKey> & { provider_id: string; api_key: string }
+  ): Promise<{ key: ProviderKey }> => {
+    try {
+      const url = payload.id
+        ? `${API_BASE}/v0/management/provider-keys/${payload.id}`
+        : `${API_BASE}/v0/management/provider-keys`;
+      const method = payload.id ? 'PUT' : 'POST';
+      const res = await fetchWithAuth(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('Failed to save provider key');
+      return await res.json();
+    } catch (e) {
+      console.error('API Error saveProviderKey', e);
+      throw e;
+    }
+  },
+
+  saveProviderKeysBulk: async (
+    providerId: string,
+    keys: Array<{ label?: string; api_key: string; enabled?: boolean; priority?: number }>
+  ): Promise<{ keys: ProviderKey[] }> => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/v0/management/provider-keys/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider_id: providerId, keys }),
+      });
+      if (!res.ok) throw new Error('Failed to bulk-save provider keys');
+      return await res.json();
+    } catch (e) {
+      console.error('API Error saveProviderKeysBulk', e);
+      throw e;
+    }
+  },
+
+  deleteProviderKey: async (id: string): Promise<void> => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/v0/management/provider-keys/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Failed to delete provider key');
+    } catch (e) {
+      console.error('API Error deleteProviderKey', e);
       throw e;
     }
   },

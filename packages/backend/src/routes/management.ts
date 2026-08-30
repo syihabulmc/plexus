@@ -17,6 +17,7 @@ import { registerMcpOAuthManagementRoutes } from './management/mcp-oauth';
 import { registerLoggingRoutes } from './management/logging';
 import { registerRestartRoutes } from './management/restart';
 import { registerProviderRoutes } from './management/providers';
+import { registerProviderKeyRoutes } from './management/provider-keys';
 import { registerMetricsRoutes } from './management/metrics';
 import { registerSelfRoutes } from './management/self';
 import { authenticate, requireAdmin, ManagementAuthError } from './management/_principal';
@@ -105,6 +106,7 @@ export async function registerManagementRoutes(
       await registerLoggingRoutes(adminOnly);
       await registerRestartRoutes(adminOnly);
       await registerProviderRoutes(adminOnly);
+      await registerProviderKeyRoutes(adminOnly);
       await registerMetricsRoutes(adminOnly, usageStorage);
       await registerPerformanceRoutes(adminOnly, usageStorage);
       if (quotaScheduler) {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { McpServerConfigSchema } from '@plexus/shared';
 import { logger } from './utils/logger';
-import { DEFAULT_VISION_DESCRIPTION_PROMPT } from './utils/constants';
+import { DEFAULT_VISION_DESCRIPTION_PROMPT, QUOTA_ERROR_PATTERNS } from './utils/constants';
 import { isValidIpRule } from './utils/ip-match';
 import { getCatalogModel } from './services/pi-ai/catalog';
 import { isKnownOAuthProviderId } from './services/oauth/oauth-providers';
@@ -19,6 +19,12 @@ const FailoverPolicySchema = z.object({
     .array(z.number().int().min(100).max(599))
     .default(DEFAULT_RETRYABLE_STATUS_CODES),
   retryableErrors: z.array(z.string().min(1)).default(['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND']),
+  // Per-key failover: when a provider has multiple API keys, retry the SAME
+  // provider/model against its next healthy key (in priority order) before
+  // failing over to a different provider. Implemented as candidate expansion —
+  // see expandCandidatesPerKey. Enabled unless explicitly set to false
+  // (opt-out, so existing config literals stay valid).
+  perKey: z.boolean().optional(),
 });
 
 const PricingRangeSchema = z.object({
@@ -318,6 +324,25 @@ export const ProviderConfigSchema = z
     pi_ai_provider: z.string().optional(),
     compaction: CompactionOverrideSchema.optional(),
     raw_passthrough: RawPassthroughConfigSchema.optional(),
+    // Per-provider multi-key configuration. Each entry is a distinct API key
+    // treated as a first-class identity for routing, cooldowns, quota, and
+    // logs. When set, the dispatcher picks the first healthy key (priority
+    // ascending) and fails over to the next key on the same provider before
+    // trying a different provider.
+    api_keys: z
+      .array(
+        z.object({
+          id: z.string(),
+          provider_id: z.string(),
+          label: z.string(),
+          api_key: z.string(),
+          management_key: z.string().optional(),
+          notes: z.string().optional(),
+          enabled: z.boolean(),
+          priority: z.number(),
+        })
+      )
+      .optional(),
   })
   .refine((data) => !!data.api_key || isOAuthProviderConfig(data), {
     message: "'api_key' must be specified for provider",
@@ -744,6 +769,12 @@ const QuotaConfigSchema = z.object({
   id: z.string(),
   type: z.string(),
   provider: z.string(),
+  // When set, the quota checker is bound to a specific provider key (i.e. one
+  // checker per key when a provider has multiple api_keys). Per-key checkers
+  // are emitted as `<providerId>:key:<keyId>` so they are unique and can be
+  // disabled/replaced independently. Used by QuotaScheduler to thread the
+  // keyId through MeterContext so the key-level cooldown can be targeted.
+  keyId: z.string().optional(),
   enabled: z.boolean().default(true),
   intervalMinutes: z.number().min(1).default(30),
   options: z.record(z.string(), z.any()).default({}),
@@ -765,6 +796,21 @@ const BackgroundExplorationConfigSchema = z.object({
   enabled: z.boolean().default(false),
   stalenessThresholdSeconds: z.number().int().min(1).default(600),
   workerConcurrency: z.number().int().min(1).max(16).default(2),
+});
+
+/**
+ * Auto-disable config. When a request error matches `errorPatterns` AND
+ * has a quota status code (402/400), the dispatcher disables either the
+ * single key (preferred) or the per-model fallback. The `mode` field is
+ * preserved for config compatibility but the actual behaviour now keys
+ * off `selectedKeyId` from the dispatch attempt.
+ */
+const AutoDisableOnQuotaErrorSchema = z.object({
+  enabled: z.boolean().default(false),
+  // 'provider' retained for legacy semantics; 'key' (default) only acts
+  // when a keyId is available, otherwise falls back to per-model.
+  mode: z.enum(['provider', 'key']).default('key'),
+  errorPatterns: z.array(z.string()).default(QUOTA_ERROR_PATTERNS),
 });
 
 const StallConfigSchema = z.object({
@@ -807,12 +853,14 @@ const RawPlexusConfigSchema = z
     // a key either uses its own `quotas` or falls back to this list, never both.
     default_quotas: z.array(z.string()).optional(),
     compaction: CompactionOverrideSchema.optional(),
+    autoDisableOnQuotaError: AutoDisableOnQuotaErrorSchema.optional(),
   })
   .passthrough();
 
 export type FailoverPolicy = z.infer<typeof FailoverPolicySchema>;
 export type CooldownPolicy = z.infer<typeof CooldownPolicySchema>;
 export type BackgroundExplorationConfig = z.infer<typeof BackgroundExplorationConfigSchema>;
+export type AutoDisableOnQuotaErrorConfig = z.infer<typeof AutoDisableOnQuotaErrorSchema>;
 export type TimeoutConfig = { defaultSeconds: number };
 export type StallConfigType = {
   ttfbSeconds?: number | null;
@@ -839,11 +887,30 @@ export type PlexusConfig = z.infer<typeof RawPlexusConfigSchema> & {
   //  - specific CIDRs: trust only matching peers
   // See getTrustedClientIp for enforcement.
   trustedProxies?: string[];
+  autoDisableOnQuotaError?: AutoDisableOnQuotaErrorConfig;
 };
 export type DatabaseConfig = {
   connectionString: string;
 };
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
+
+/**
+ * A single API key configured for a provider. Persisted encrypted in
+ * `provider_keys` (api_key + management_key) and decrypted on read by
+ * `ConfigRepository.rowToProviderKeyConfig`. The `api_keys` Zod item on
+ * `ProviderConfigSchema` produces the wire shape; this interface is what
+ * runtime code (dispatcher, quota config) sees after decryption.
+ */
+export interface ProviderKeyConfig {
+  id: string;
+  provider_id: string;
+  label: string;
+  api_key: string; // decrypted
+  management_key?: string; // decrypted; optional
+  notes?: string; // plain text, not encrypted
+  enabled: boolean;
+  priority: number;
+}
 export type ModelProviderConfig = z.infer<typeof ModelProviderConfigSchema>;
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 export type KeyConfig = z.infer<typeof KeyConfigSchema>;
@@ -977,6 +1044,9 @@ function hydrateConfig(config: z.infer<typeof RawPlexusConfigSchema>): PlexusCon
     cooldown: CooldownPolicySchema.parse(config.cooldown ?? {}),
     quotas: buildProviderQuotaConfigs(config),
     mcpServers: config.mcp_servers,
+    autoDisableOnQuotaError: config.autoDisableOnQuotaError
+      ? AutoDisableOnQuotaErrorSchema.parse(config.autoDisableOnQuotaError)
+      : AutoDisableOnQuotaErrorSchema.parse({}),
   };
 }
 
@@ -1095,6 +1165,55 @@ function buildProviderQuotaConfigs(config: z.infer<typeof RawPlexusConfigSchema>
       intervalMinutes: quotaChecker.intervalMinutes,
       options,
     });
+
+    // Per-key checkers: when a provider has multiple api_keys, emit one
+    // checker per key so each key's quota is tracked independently. The
+    // keyId is threaded into QuotaConfig so the scheduler can target the
+    // per-key cooldown slot. managementKey (if present) takes precedence
+    // over apiKey in checker auth headers (used by OpenRouter for credit
+    // balance checks).
+    if (providerConfig.api_keys && providerConfig.api_keys.length > 0) {
+      for (const keyConfig of providerConfig.api_keys) {
+        if (!keyConfig.enabled) continue;
+        const keyApiKey = keyConfig.api_key?.trim();
+        if (!keyApiKey || keyApiKey.toLowerCase() === 'oauth') continue;
+
+        const keyCheckerId = `${providerId}:key:${keyConfig.id}`;
+        if (seenIds.has(keyCheckerId)) continue;
+        seenIds.add(keyCheckerId);
+
+        const keyOptions: Record<string, unknown> = {
+          ...(quotaChecker.options ?? {}),
+          apiKey: keyApiKey,
+          ...(keyConfig.management_key?.trim()
+            ? { managementKey: keyConfig.management_key.trim() }
+            : {}),
+        };
+
+        if (providerConfig.oauth_provider && keyOptions.oauthProvider === undefined) {
+          keyOptions.oauthProvider = providerConfig.oauth_provider;
+        }
+        if (providerConfig.oauth_account && keyOptions.oauthAccountId === undefined) {
+          keyOptions.oauthAccountId = providerConfig.oauth_account;
+        }
+        if (
+          providerConfig.allow_100_percent_utilization !== undefined &&
+          keyOptions.allow100PercentUtilization === undefined
+        ) {
+          keyOptions.allow100PercentUtilization = providerConfig.allow_100_percent_utilization;
+        }
+
+        quotas.push({
+          id: keyCheckerId,
+          provider: providerId,
+          keyId: keyConfig.id,
+          type: checkerType,
+          enabled: true,
+          intervalMinutes: quotaChecker.intervalMinutes,
+          options: keyOptions,
+        });
+      }
+    }
   }
 
   return quotas;

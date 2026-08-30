@@ -96,7 +96,7 @@ function makeHost(overrides: Partial<RequestManagerHost> = {}): RequestManagerHo
     recordStickySession: vi.fn(),
     saveIntermediateError: vi.fn(),
     selectTargetApiType: vi.fn(() => ({ selectionReason: 'test' })),
-    setupHeaders: vi.fn(() => ({})),
+    setupHeaders: vi.fn(async () => ({})),
     transformRequestPayload: vi.fn(async () => ({ payload: {}, bypassTransformation: false })),
     ...overrides,
   };

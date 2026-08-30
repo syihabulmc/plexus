@@ -17,6 +17,13 @@ import { ConcurrencyTracker } from '../runtime/concurrency-tracker';
 import { DebugManager } from '../observability/debug-manager';
 import { EmbeddingsTransformerFactory } from './embeddings-transformer-factory';
 import type { RetryAttemptRecord } from './dispatcher-types';
+import {
+  selectProviderKey,
+  resolveSelectedKeyLabel,
+  buildAllKeysUnavailableError,
+  type ApiKeyEntry,
+} from '../providers/provider-request-headers';
+import { autoDisableOnQuotaError } from './auto-disable';
 
 interface MediaDispatchHost {
   resolveBaseUrl(route: RouteResult, apiType: string): string;
@@ -51,6 +58,57 @@ interface MediaDispatchHost {
 
 export class MediaDispatcher {
   constructor(private readonly host: MediaDispatchHost) {}
+
+  /**
+   * Resolve the API key for a media route. Selects the first healthy
+   * key from `route.config.api_keys` (priority ascending, skips
+   * disabled/cooldown) and stamps `route.selectedKeyId` + label.
+   * Throws ALL_KEYS_UNAVAILABLE when no key is healthy; falls back to
+   * the legacy single `api_key` field when no `api_keys` array is
+   * configured. This mirrors the chat-style `setupProviderHeaders`
+   * so per-key cooldown, auto-disable, and sticky session all work
+   * uniformly across request types.
+   */
+  private async resolveApiKeyForRoute(
+    route: RouteResult
+  ): Promise<string | undefined> {
+    const apiKeys = route.config.api_keys as ApiKeyEntry[] | undefined;
+    if (!apiKeys || apiKeys.length === 0) {
+      // Legacy single api_key path.
+      route.selectedKeyId = undefined;
+      route.selectedKeyLabel = resolveSelectedKeyLabel(undefined);
+      return route.config.api_key;
+    }
+    const selectedKey = await selectProviderKey(route);
+    if (!selectedKey) {
+      throw buildAllKeysUnavailableError(route.provider, apiKeys);
+    }
+    route.selectedKeyId = selectedKey.id;
+    route.selectedKeyLabel = resolveSelectedKeyLabel(selectedKey);
+    return selectedKey.api_key;
+  }
+
+  /**
+   * Stamp only the route identity fields (selectedKeyId/Label) by
+   * selecting a key without changing which key the auth header will
+   * use. Used by the legacy single-key path so the in-flight usage
+   * row still carries the keyId/label even when no api_keys array
+   * is present.
+   */
+  private async stampRouteIdentity(route: RouteResult): Promise<void> {
+    const apiKeys = route.config.api_keys as ApiKeyEntry[] | undefined;
+    if (apiKeys && apiKeys.length > 0) {
+      const selectedKey = await selectProviderKey(route);
+      if (selectedKey) {
+        route.selectedKeyId = selectedKey.id;
+        route.selectedKeyLabel = resolveSelectedKeyLabel(selectedKey);
+        return;
+      }
+      throw buildAllKeysUnavailableError(route.provider, apiKeys);
+    }
+    route.selectedKeyId = undefined;
+    route.selectedKeyLabel = resolveSelectedKeyLabel(undefined);
+  }
 
   /**
    * Dispatch embeddings request to provider
@@ -143,11 +201,12 @@ export class MediaDispatcher {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         };
-        if (route.config.api_key) {
+        const apiKeyForAuth = await this.resolveApiKeyForRoute(route);
+        if (apiKeyForAuth) {
           if (transformer.getAuthHeaders) {
-            transformer.getAuthHeaders(route.config.api_key, headers);
+            transformer.getAuthHeaders(apiKeyForAuth, headers);
           } else {
-            headers['Authorization'] = `Bearer ${route.config.api_key}`;
+            headers['Authorization'] = `Bearer ${apiKeyForAuth}`;
           }
         }
         if (route.config.headers) {
@@ -220,7 +279,8 @@ export class MediaDispatcher {
                   route.provider,
                   route.model,
                   undefined,
-                  host.formatFailureReason(e, true)
+                  host.formatFailureReason(e, true),
+                  route.selectedKeyId
                 );
               }
               host.saveIntermediateError(request.requestId, 'embeddings', e);
@@ -263,7 +323,7 @@ export class MediaDispatcher {
         };
 
         await host.recordAttemptMetric(route, request.requestId, true);
-        CooldownManager.getInstance().markProviderSuccess(route.provider, route.model);
+        CooldownManager.getInstance().markProviderSuccess(route.provider, route.model, route.selectedKeyId);
         host.appendSuccessAttempt(retryHistory, route, 'embeddings');
         host.attachAttemptMetadata(
           enrichedResponse,
@@ -283,7 +343,8 @@ export class MediaDispatcher {
             route.provider,
             route.model,
             undefined,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
         }
         await host.recordAttemptMetric(route, request.requestId, false);
@@ -396,8 +457,15 @@ export class MediaDispatcher {
 
         const headers: Record<string, string> = {};
 
-        if (route.config.api_key) {
-          headers['Authorization'] = `Bearer ${route.config.api_key}`;
+        // selectProviderKey was called above; the chosen key is
+        // stamped on route.selectedKeyId, but we need its plaintext
+        // api_key for the auth header. resolveApiKeyForRoute already
+        // returned this on the embeddings path; for the simpler
+        // paths below we call it inline so route.selectedKeyId is
+        // populated before the auth header is built.
+        const apiKeyForAuth = await this.resolveApiKeyForRoute(route);
+        if (apiKeyForAuth) {
+          headers['Authorization'] = `Bearer ${apiKeyForAuth}`;
         }
 
         if (route.config.headers) {
@@ -469,7 +537,8 @@ export class MediaDispatcher {
                   route.provider,
                   route.model,
                   undefined,
-                  host.formatFailureReason(e, true)
+                  host.formatFailureReason(e, true),
+                  route.selectedKeyId
                 );
               }
               host.saveIntermediateError(request.requestId, 'transcriptions', e);
@@ -530,7 +599,8 @@ export class MediaDispatcher {
             route.provider,
             route.model,
             undefined,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
         }
         await host.recordAttemptMetric(route, request.requestId, false);
@@ -642,8 +712,15 @@ export class MediaDispatcher {
           'Content-Type': 'application/json',
         };
 
-        if (route.config.api_key) {
-          headers['Authorization'] = `Bearer ${route.config.api_key}`;
+        // selectProviderKey was called above; the chosen key is
+        // stamped on route.selectedKeyId, but we need its plaintext
+        // api_key for the auth header. resolveApiKeyForRoute already
+        // returned this on the embeddings path; for the simpler
+        // paths below we call it inline so route.selectedKeyId is
+        // populated before the auth header is built.
+        const apiKeyForAuth = await this.resolveApiKeyForRoute(route);
+        if (apiKeyForAuth) {
+          headers['Authorization'] = `Bearer ${apiKeyForAuth}`;
         }
 
         if (route.config.headers) {
@@ -726,7 +803,8 @@ export class MediaDispatcher {
                   route.provider,
                   route.model,
                   undefined,
-                  host.formatFailureReason(e, true)
+                  host.formatFailureReason(e, true),
+                  route.selectedKeyId
                 );
               }
               host.saveIntermediateError(request.requestId, 'speech', e);
@@ -762,7 +840,8 @@ export class MediaDispatcher {
                 route.provider,
                 route.model,
                 (error as any).cooldownDuration,
-                error.message
+                error.message,
+                route.selectedKeyId
               );
               host.saveIntermediateError(request.requestId, 'speech', error);
               logger.warn(
@@ -832,7 +911,8 @@ export class MediaDispatcher {
             route.provider,
             route.model,
             undefined,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
         }
         await host.recordAttemptMetric(route, request.requestId, false);
@@ -946,8 +1026,15 @@ export class MediaDispatcher {
           Accept: 'application/json',
         };
 
-        if (route.config.api_key) {
-          headers['Authorization'] = `Bearer ${route.config.api_key}`;
+        // selectProviderKey was called above; the chosen key is
+        // stamped on route.selectedKeyId, but we need its plaintext
+        // api_key for the auth header. resolveApiKeyForRoute already
+        // returned this on the embeddings path; for the simpler
+        // paths below we call it inline so route.selectedKeyId is
+        // populated before the auth header is built.
+        const apiKeyForAuth = await this.resolveApiKeyForRoute(route);
+        if (apiKeyForAuth) {
+          headers['Authorization'] = `Bearer ${apiKeyForAuth}`;
         }
 
         if (route.config.headers) {
@@ -1028,7 +1115,8 @@ export class MediaDispatcher {
                   route.provider,
                   route.model,
                   undefined,
-                  host.formatFailureReason(e, true)
+                  host.formatFailureReason(e, true),
+                  route.selectedKeyId
                 );
               }
               host.saveIntermediateError(request.requestId, 'images', e);
@@ -1081,7 +1169,8 @@ export class MediaDispatcher {
             route.provider,
             route.model,
             undefined,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
         }
         await host.recordAttemptMetric(route, request.requestId, false);
@@ -1191,8 +1280,15 @@ export class MediaDispatcher {
 
         const headers: Record<string, string> = {};
 
-        if (route.config.api_key) {
-          headers['Authorization'] = `Bearer ${route.config.api_key}`;
+        // selectProviderKey was called above; the chosen key is
+        // stamped on route.selectedKeyId, but we need its plaintext
+        // api_key for the auth header. resolveApiKeyForRoute already
+        // returned this on the embeddings path; for the simpler
+        // paths below we call it inline so route.selectedKeyId is
+        // populated before the auth header is built.
+        const apiKeyForAuth = await this.resolveApiKeyForRoute(route);
+        if (apiKeyForAuth) {
+          headers['Authorization'] = `Bearer ${apiKeyForAuth}`;
         }
 
         if (route.config.headers) {
@@ -1262,7 +1358,8 @@ export class MediaDispatcher {
                   route.provider,
                   route.model,
                   undefined,
-                  host.formatFailureReason(e, true)
+                  host.formatFailureReason(e, true),
+                  route.selectedKeyId
                 );
               }
               host.saveIntermediateError(request.requestId, 'images', e);
@@ -1315,7 +1412,8 @@ export class MediaDispatcher {
             route.provider,
             route.model,
             undefined,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
         }
         await host.recordAttemptMetric(route, request.requestId, false);

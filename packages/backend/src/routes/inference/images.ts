@@ -93,6 +93,7 @@ export async function registerImagesRoute(
         provider: unifiedResponse.plexus?.provider,
         selectedModelName: unifiedResponse.plexus?.model,
         canonicalModelName: unifiedResponse.plexus?.canonicalModel,
+        selectedKeyLabel: unifiedResponse.plexus?.selectedKeyLabel,
       });
 
       usageRecord.provider = unifiedResponse.plexus?.provider;
@@ -269,6 +270,7 @@ export async function registerImagesRoute(
         provider: unifiedResponse.plexus?.provider,
         selectedModelName: unifiedResponse.plexus?.model,
         canonicalModelName: unifiedResponse.plexus?.canonicalModel,
+        selectedKeyLabel: unifiedResponse.plexus?.selectedKeyLabel,
       });
 
       usageRecord.provider = unifiedResponse.plexus?.provider;

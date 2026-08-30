@@ -140,12 +140,22 @@ export class QuotaScheduler {
     let result: MeterCheckResult;
 
     try {
-      const ctx = createMeterContext(checkerId, config.provider, config.options);
+      // Per-key checkers carry the keyId on the QuotaConfig (set by
+      // buildProviderQuotaConfigs for `${provider}:key:${keyId}` checkers).
+      // Pass it through to the MeterContext so the checker can attribute
+      // results to a specific key, and so the cooldown call below can
+      // target the per-key slot.
+      const ctx = createMeterContext(checkerId, config.provider, config.options, config.keyId);
       const meters = await def.check(ctx);
       result = {
         checkerId,
         checkerType: config.type,
         provider: config.provider,
+        // CRITICAL: thread keyId from the config onto the result so
+        // applyCooldownsFromResult can target the per-key cooldown slot.
+        // Without this, per-key exhaustion always cascaded to the
+        // per-model slot regardless of the design.
+        keyId: config.keyId,
         checkedAt,
         success: true,
         meters,
@@ -156,6 +166,7 @@ export class QuotaScheduler {
         checkerId,
         checkerType: config.type,
         provider: config.provider,
+        keyId: config.keyId,
         checkedAt,
         success: false,
         error: message,
@@ -227,23 +238,39 @@ export class QuotaScheduler {
       const durationMs =
         latestResetMs !== null ? Math.max(0, latestResetMs - Date.now()) : INDEFINITE_COOLDOWN_MS;
 
+      // Per design: no provider-wide cascade. Per-key checkers target
+      // their own key's cooldown slot only. Provider-level checkers (no
+      // keyId) target the per-model slot. We use `model: ''` for both —
+      // the per-key slot is `${provider}::${keyId}` (3-segment with empty
+      // model) and the per-model slot is `${provider}:` (2-segment with
+      // empty model). The keyId disambiguates.
+      const keyId = result.keyId;
+      const modelSlot = '';
+      const targetDesc = keyId
+        ? `key '${keyId}' of provider '${provider}'`
+        : `provider '${provider}'`;
+
       logger.info(
-        `Provider '${provider}' quota exhausted` +
+        `${targetDesc} quota exhausted` +
           ` (meter: ${exhaustedMeterLabel}, threshold: ${exhaustionThreshold}%, checker: ${result.checkerId}).` +
           (latestResetMs !== null
-            ? ` Injecting provider-wide cooldown for ${Math.round(durationMs / 1000)}s.`
-            : ` Injecting provider-wide indefinite cooldown until reset/balance recovery.`)
+            ? ` Injecting cooldown for ${Math.round(durationMs / 1000)}s.`
+            : ` Injecting indefinite cooldown until reset/balance recovery.`)
       );
       await cooldownManager.markProviderFailure(
         provider,
-        '',
+        modelSlot,
         durationMs,
-        `quota exhausted (threshold: ${exhaustionThreshold}%) — ${exhaustedMeterLabel}`
+        `quota exhausted (threshold: ${exhaustionThreshold}%) — ${exhaustedMeterLabel}`,
+        keyId
       );
     } else {
       const strictestThreshold = this.getStrictestThresholdForProvider(provider);
       if (exhaustionThreshold <= strictestThreshold) {
-        await cooldownManager.markProviderSuccess(provider, '');
+        // Clear the matching cooldown slot. For per-key checkers, only
+        // the per-key slot; for provider-level, the per-model slot.
+        const keyId = result.keyId;
+        await cooldownManager.markProviderSuccess(provider, '', keyId);
       } else {
         logger.debug(
           `Checker '${result.checkerId}' sees provider '${provider}' as healthy, ` +

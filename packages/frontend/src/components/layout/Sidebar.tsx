@@ -311,6 +311,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mode = 'desktop' }) => {
           <>
             <NavSection title="Configuration" collapsed={collapsed} />
             <NavItem to="/providers" icon={Server} label="Providers" collapsed={collapsed} />
+            <NavItem to="/provider-keys" icon={Key} label="Provider Keys" collapsed={collapsed} />
             <NavItem to="/models" icon={Boxes} label="Models" collapsed={collapsed} />
             <NavItem to="/keys" icon={Key} label="Keys" collapsed={collapsed} />
             <NavItem to="/quotas" icon={Gauge} label="Quotas" collapsed={collapsed} />

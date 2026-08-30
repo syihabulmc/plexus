@@ -23,6 +23,12 @@ export interface RouteResult {
   modelConfig?: ModelProviderConfig;
   incomingModelAlias?: string;
   canonicalModel?: string;
+  // Per-key identity. Set by selectProviderKey in setupProviderHeaders.
+  // Used by the dispatcher to thread the keyId into cooldown calls
+  // (markProviderSuccess/Failure) and into the usage record's
+  // selected_key_label column. Cleared on the legacy single api_key path.
+  selectedKeyId?: string;
+  selectedKeyLabel?: string;
 }
 
 function tryParseDirectGroup(modelName: string): { aliasName: string; groupName: string } | null {
@@ -461,8 +467,11 @@ export class Router {
     // Sticky session: if enabled and we have a session key, look up the
     // provider:model used last turn. We don't return early — we still build
     // the full candidate list so failover works — but we hoist the sticky
-    // pick to position 0 if it's still a healthy candidate.
-    let stickyPick: { provider: string; model: string } | null = null;
+    // pick to position 0 if it's still a healthy candidate. Per-key
+    // stickiness: when the sticky entry has a keyId, the candidate whose
+    // `api_keys` array contains that keyId is hoisted (or the legacy
+    // single-key candidate if no api_keys array is configured).
+    let stickyPick: { provider: string; model: string; keyId?: string } | null = null;
     if (alias.sticky_session && sessionKey) {
       stickyPick = StickySessionManager.getInstance().get(
         canonicalModel,
@@ -488,18 +497,35 @@ export class Router {
     orderedCandidates = dedupeCandidates(orderedCandidates);
 
     if (stickyPick) {
-      const idx = orderedCandidates.findIndex(
-        (c) => c.provider === stickyPick!.provider && c.model === stickyPick!.model
-      );
+      // Prefer the candidate whose api_keys contains the sticky keyId (per-key
+      // sticky). Fall back to the (provider, model) match when no keyId was
+      // stored (legacy entry) or when the provider has no api_keys.
+      const idx = stickyPick.keyId
+        ? orderedCandidates.findIndex(
+            (c) =>
+              c.provider === stickyPick!.provider &&
+              c.model === stickyPick!.model &&
+              Array.isArray(c.config.api_keys) &&
+              (c.config.api_keys ?? []).some((k) => k.id === stickyPick!.keyId)
+          )
+        : orderedCandidates.findIndex(
+            (c) => c.provider === stickyPick!.provider && c.model === stickyPick!.model
+          );
       if (idx > 0) {
         const [picked] = orderedCandidates.splice(idx, 1);
+        // Pre-stamp the keyId so selectProviderKey prefers it (priority sort
+        // would still pick a different key, so we set it explicitly via
+        // casting to ApiKeyEntry for clarity).
+        if (picked && stickyPick.keyId) {
+          picked.selectedKeyId = stickyPick.keyId;
+        }
         orderedCandidates.unshift(picked!);
         logger.info(
-          `Router: sticky_session hoisted '${stickyPick.provider}/${stickyPick.model}' to front for alias '${modelName}'.`
+          `Router: sticky_session hoisted '${stickyPick.provider}/${stickyPick.model}'${stickyPick.keyId ? ` key '${stickyPick.keyId}'` : ''} to front for alias '${modelName}'.`
         );
       } else if (idx === -1) {
         logger.debug(
-          `Router: sticky_session pick '${stickyPick.provider}/${stickyPick.model}' for alias '${modelName}' is no longer a healthy candidate; using normal selection.`
+          `Router: sticky_session pick '${stickyPick.provider}/${stickyPick.model}'${stickyPick.keyId ? ` key '${stickyPick.keyId}'` : ''} for alias '${modelName}' is no longer a healthy candidate; using normal selection.`
         );
       }
     }

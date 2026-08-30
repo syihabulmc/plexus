@@ -1,6 +1,6 @@
 import { logger } from '../../utils/logger';
 import { getDatabase, getSchema } from '../../db/client';
-import { lt, eq, sql, and, desc } from 'drizzle-orm';
+import { lt, eq, sql, and, desc, gte, gt, or } from 'drizzle-orm';
 import { getConfig } from '../../config';
 import { DebugManager } from '../observability/debug-manager';
 import { getCurrentRequestId } from '../observability/request-context';
@@ -50,18 +50,32 @@ export class CooldownManager {
       const db = this.ensureDb();
       const now = Date.now();
 
+      // Purge truly expired rows (0 < expiry < now). Rows with expiry === 0
+      // are retained failure counts (cooldown already lapsed) and must survive
+      // a restart so escalation continues from the saved count.
       await db
         .delete(this.schema.providerCooldowns)
-        .where(lt(this.schema.providerCooldowns.expiry, now));
+        .where(
+          and(
+            lt(this.schema.providerCooldowns.expiry, now),
+            gt(this.schema.providerCooldowns.expiry, 0)
+          )
+        );
 
       const rows = await db
         .select()
         .from(this.schema.providerCooldowns)
-        .where(sql`${this.schema.providerCooldowns.expiry} >= ${now}`);
+        .where(
+          or(
+            gte(this.schema.providerCooldowns.expiry, now),
+            eq(this.schema.providerCooldowns.expiry, 0)
+          )
+        );
 
       this.cooldowns.clear();
       for (const row of rows) {
-        const key = CooldownManager.makeCooldownKey(row.provider, row.model || '');
+        const keyId = (row as any).keyId || undefined;
+        const key = CooldownManager.makeCooldownKey(row.provider, row.model || '', keyId);
         this.cooldowns.set(key, {
           expiry: row.expiry,
           consecutiveFailures: row.consecutiveFailures || 0,
@@ -75,7 +89,14 @@ export class CooldownManager {
     }
   }
 
-  private static makeCooldownKey(provider: string, model: string): string {
+  /**
+   * Cooldown in-memory key. 3-segment when keyId is set (per-key cooldown),
+   * 2-segment otherwise (legacy single-key / model-level cooldown). The
+   * PK on provider_cooldowns is (provider, model, key_id) so the DB and
+   * in-memory representations align.
+   */
+  private static makeCooldownKey(provider: string, model: string, keyId?: string): string {
+    if (keyId) return `${provider}:${model}:${keyId}`;
     return `${provider}:${model}`;
   }
 
@@ -101,7 +122,8 @@ export class CooldownManager {
   public async markProviderStallFailure(
     provider: string,
     model: string,
-    lastError?: string
+    lastError?: string,
+    keyId?: string
   ): Promise<void> {
     if (!this.isStallCooldownEnabledForProvider(provider)) {
       logger.debug(
@@ -109,7 +131,7 @@ export class CooldownManager {
       );
       return;
     }
-    await this.markProviderFailure(provider, model, undefined, lastError);
+    await this.markProviderFailure(provider, model, undefined, lastError, keyId);
   }
 
   private async pruneDisabledProviders(): Promise<void> {
@@ -184,7 +206,8 @@ export class CooldownManager {
     provider: string,
     model: string,
     durationMs?: number,
-    lastError?: string
+    lastError?: string,
+    keyId?: string
   ): Promise<void> {
     if (this.isCooldownDisabledForProvider(provider)) {
       logger.debug(
@@ -203,7 +226,7 @@ export class CooldownManager {
       return;
     }
 
-    const key = CooldownManager.makeCooldownKey(provider, model);
+    const key = CooldownManager.makeCooldownKey(provider, model, keyId);
     const existingEntry = this.cooldowns.get(key);
     const consecutiveFailures = (existingEntry?.consecutiveFailures || 0) + 1;
 
@@ -218,8 +241,9 @@ export class CooldownManager {
     // no-op when the mode is off or outside a request context (e.g. probes).
     DebugManager.getInstance().markForcePersist(getCurrentRequestId());
 
+    const keySuffix = keyId ? ` key '${keyId}'` : '';
     logger.warn(
-      `Provider '${provider}' model '${model}' placed on cooldown for ${duration / 1000}s ` +
+      `Provider '${provider}' model '${model}'${keySuffix} placed on cooldown for ${duration / 1000}s ` +
         `(failure #${consecutiveFailures}) until ${new Date(expiry).toISOString()}`
     );
 
@@ -230,13 +254,18 @@ export class CooldownManager {
         .values({
           provider,
           model,
+          keyId: keyId ?? '',
           expiry,
           consecutiveFailures,
           createdAt: Date.now(),
           lastError: lastError ?? null,
         })
         .onConflictDoUpdate({
-          target: [this.schema.providerCooldowns.provider, this.schema.providerCooldowns.model],
+          target: [
+            this.schema.providerCooldowns.provider,
+            this.schema.providerCooldowns.model,
+            this.schema.providerCooldowns.keyId,
+          ],
           set: {
             expiry,
             consecutiveFailures,
@@ -248,8 +277,8 @@ export class CooldownManager {
     }
   }
 
-  public async markProviderSuccess(provider: string, model: string): Promise<void> {
-    const key = CooldownManager.makeCooldownKey(provider, model);
+  public async markProviderSuccess(provider: string, model: string, keyId?: string): Promise<void> {
+    const key = CooldownManager.makeCooldownKey(provider, model, keyId);
     const existingEntry = this.cooldowns.get(key);
 
     if (!existingEntry) {
@@ -261,41 +290,41 @@ export class CooldownManager {
     this.cooldowns.delete(key);
 
     if (existingEntry.consecutiveFailures > 0) {
+      const keySuffix = keyId ? ` key '${keyId}'` : '';
       logger.info(
-        `Provider '${provider}' model '${model}' succeeded - resetting failure count (was ${existingEntry.consecutiveFailures})`
+        `Provider '${provider}' model '${model}'${keySuffix} succeeded - resetting failure count (was ${existingEntry.consecutiveFailures})`
       );
     }
 
     try {
       const db = this.ensureDb();
+      // When no keyId is given, only clear the row where key_id === '' (the
+      // model-level slot) so we don't accidentally wipe per-key cooldowns
+      // (which live at the same (provider, model) but with a non-empty keyId).
+      const conditions = [
+        eq(this.schema.providerCooldowns.provider, provider),
+        eq(this.schema.providerCooldowns.model, model),
+      ];
+      if (keyId) {
+        conditions.push(eq(this.schema.providerCooldowns.keyId, keyId));
+      } else {
+        conditions.push(eq(this.schema.providerCooldowns.keyId, ''));
+      }
       await db
         .delete(this.schema.providerCooldowns)
-        .where(
-          and(
-            eq(this.schema.providerCooldowns.provider, provider),
-            eq(this.schema.providerCooldowns.model, model)
-          )
-        );
+        .where(and(...conditions));
     } catch (e) {
       logger.error(`Failed to clear cooldown for ${provider}:${model}`, e);
     }
   }
 
-  public async isProviderHealthy(provider: string, model: string): Promise<boolean> {
-    // First check for a provider-wide cooldown (keyed with empty model string).
-    // This is set by the quota scheduler when any checker detects utilization at or above its threshold,
-    // and blocks all models under the provider until the quota window resets.
-    if (model !== '') {
-      const providerWideHealthy = await this.isProviderHealthy(provider, '');
-      if (!providerWideHealthy) {
-        logger.debug(
-          `Provider '${provider}' model '${model}' blocked by provider-wide quota cooldown`
-        );
-        return false;
-      }
-    }
-
-    const key = CooldownManager.makeCooldownKey(provider, model);
+  public async isProviderHealthy(provider: string, model: string, keyId?: string): Promise<boolean> {
+    // Per design: no provider-wide cascade. Per-key cooldowns are fully
+    // independent. The check is purely the matching slot — a key on
+    // cooldown does not block other keys of the same provider. The
+    // provider-wide slot (model === '') is kept for the legacy quota
+    // scheduler path and for callers that explicitly pass keyId === undefined.
+    const key = CooldownManager.makeCooldownKey(provider, model, keyId);
     const entry = this.cooldowns.get(key);
     if (!entry) return true;
 
@@ -309,19 +338,22 @@ export class CooldownManager {
 
       try {
         const db = this.ensureDb();
-        await db
-          .delete(this.schema.providerCooldowns)
-          .where(
-            and(
-              eq(this.schema.providerCooldowns.provider, provider),
-              eq(this.schema.providerCooldowns.model, model)
-            )
-          );
+        const conditions = [
+          eq(this.schema.providerCooldowns.provider, provider),
+          eq(this.schema.providerCooldowns.model, model),
+        ];
+        if (keyId) {
+          conditions.push(eq(this.schema.providerCooldowns.keyId, keyId));
+        } else {
+          conditions.push(eq(this.schema.providerCooldowns.keyId, ''));
+        }
+        await db.delete(this.schema.providerCooldowns).where(and(...conditions));
       } catch (e) {
         logger.error(`Failed to remove expired cooldown for ${provider}:${model}`, e);
       }
 
-      logger.info(`Provider '${provider}' model '${model}' cooldown expired, marking as healthy`);
+      const keySuffix = keyId ? ` key '${keyId}'` : '';
+      logger.info(`Provider '${provider}' model '${model}'${keySuffix} cooldown expired, marking as healthy`);
       return true;
     }
 
@@ -348,6 +380,7 @@ export class CooldownManager {
   public getCooldowns(): {
     provider: string;
     model: string;
+    keyId?: string;
     expiry: number;
     timeRemainingMs: number;
     consecutiveFailures: number;
@@ -370,9 +403,12 @@ export class CooldownManager {
           continue;
         }
         const model = parts[1] || '';
+        // 3-segment key is provider:model:keyId; 2-segment has no keyId
+        const keyId = parts[2] || undefined;
         results.push({
           provider,
           model,
+          keyId,
           expiry: entry.expiry,
           timeRemainingMs: entry.expiry - now,
           consecutiveFailures: entry.consecutiveFailures,
@@ -383,14 +419,73 @@ export class CooldownManager {
     return results;
   }
 
+  /**
+   * Hard-disable a provider key. Used by the auto-disable helper when a
+   * quota error matches a configured pattern. The key is removed from
+   * routing by:
+   *  1. Setting the per-key cooldown (so `selectProviderKey` skips it)
+   *  2. Persisting `providerKeys.enabled = 0` in the DB
+   *  3. Calling `ConfigService.flush()` so the in-memory `api_keys` array
+   *     is rebuilt without the disabled key.
+   *
+   * Per-key disable (keyId provided) does NOT cascade to other keys of
+   * the same provider. The legacy path (no keyId) falls back to a
+   * per-model cooldown.
+   */
+  public async markKeyAsDisabled(
+    provider: string,
+    model: string,
+    keyId: string | undefined,
+    reason?: string
+  ): Promise<void> {
+    if (!keyId) {
+      // Legacy path: no keyId known. Fall back to per-model cooldown
+      // (no DB-side disable, no ConfigService flush — keeps the existing
+      // behavior for users without multi-key providers).
+      await this.markProviderFailure(provider, model, undefined, reason, undefined);
+      return;
+    }
+    logger.warn(
+      `Disabling API key '${keyId}' for provider '${provider}' due to: ${reason || 'quota_exceeded'}`
+    );
+    await this.markProviderFailure(provider, model, undefined, reason, keyId);
+    try {
+      const db = this.ensureDb();
+      const schema = this.schema as any;
+      if (schema.providerKeys) {
+        await db
+          .update(schema.providerKeys)
+          .set({ enabled: 0, updatedAt: new Date().toISOString() })
+          .where(eq(schema.providerKeys.id, keyId));
+        // Rebuild config cache so the disabled key disappears from
+        // `route.config.api_keys` and from the quota emission. Imported
+        // lazily to avoid a circular module reference at load time.
+        const { ConfigService } = await import('../configuration/config-service');
+        await ConfigService.getInstance().flush();
+      }
+    } catch (e) {
+      logger.error(
+        `Failed to persist disabled state for key '${keyId}' (cooldown still applied)`,
+        e
+      );
+    }
+  }
+
   public async clearCooldown(provider?: string, model?: string): Promise<void> {
     if (provider && model) {
-      const keysToDelete = Array.from(this.cooldowns.keys()).filter((key) =>
-        key.startsWith(`${provider}:${model}`)
+      // Per-key cooldowns (3-segment key like `${provider}:${model}:${keyId}`)
+      // are NOT cleared by an admin "clear cooldowns" action — the admin
+      // UI's intent is to clear the per-model slot only. Per-key rows
+      // are removed by `markKeyAsDisabled` (which writes providerKeys.enabled
+      // = 0 and flushes) or by `clearKeyCooldown` below. This prevents
+      // accidentally wiping per-key circuit-breaker state when a model
+      // is cleared.
+      const keysToDelete = Array.from(this.cooldowns.keys()).filter(
+        (key) => key === `${provider}:${model}`
       );
       keysToDelete.forEach((key) => this.cooldowns.delete(key));
       logger.info(
-        `Manually cleared all cooldowns for provider '${provider}' model '${model}' (${keysToDelete.length} total)`
+        `Manually cleared model-level cooldown for provider '${provider}' model '${model}' (${keysToDelete.length} total)`
       );
       try {
         const db = this.ensureDb();
@@ -399,25 +494,33 @@ export class CooldownManager {
           .where(
             and(
               eq(this.schema.providerCooldowns.provider, provider),
-              eq(this.schema.providerCooldowns.model, model)
+              eq(this.schema.providerCooldowns.model, model),
+              eq(this.schema.providerCooldowns.keyId, '')
             )
           );
       } catch (e) {
         logger.error(`Failed to delete cooldowns for ${provider}:${model}`, e);
       }
     } else if (provider) {
-      const keysToDelete = Array.from(this.cooldowns.keys()).filter((key) =>
-        key.startsWith(`${provider}:`)
+      // Same protection for the provider-wide clear: per-key rows are
+      // preserved.
+      const keysToDelete = Array.from(this.cooldowns.keys()).filter(
+        (key) => key === `${provider}:` || key === `${provider}:`
       );
       keysToDelete.forEach((key) => this.cooldowns.delete(key));
       logger.info(
-        `Manually cleared all cooldowns for provider '${provider}' (${keysToDelete.length} total)`
+        `Manually cleared model-level cooldowns for provider '${provider}' (${keysToDelete.length} total)`
       );
       try {
         const db = this.ensureDb();
         await db
           .delete(this.schema.providerCooldowns)
-          .where(eq(this.schema.providerCooldowns.provider, provider));
+          .where(
+            and(
+              eq(this.schema.providerCooldowns.provider, provider),
+              eq(this.schema.providerCooldowns.keyId, '')
+            )
+          );
       } catch (e) {
         logger.error(`Failed to delete cooldowns for ${provider}`, e);
       }

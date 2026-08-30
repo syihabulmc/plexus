@@ -110,6 +110,10 @@ export async function handleResponse(
   usageRecord.selectedModelName = unifiedResponse.plexus?.model || unifiedResponse.model; // Fallback to unifiedResponse.model if plexus.model is missing
   usageRecord.provider = unifiedResponse.plexus?.provider || 'unknown';
   usageRecord.canonicalModelName = unifiedResponse.plexus?.canonicalModel || null;
+  // Per-key label propagated from the dispatch attempt. Falls back to null
+  // on the legacy single api_key path; the Logs UI renders null as
+  // 'default'.
+  usageRecord.selectedKeyLabel = unifiedResponse.plexus?.selectedKeyLabel ?? null;
 
   // Set provider info for debug logging filter
   if (usageRecord.provider) {

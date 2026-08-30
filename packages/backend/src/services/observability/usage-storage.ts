@@ -224,6 +224,10 @@ export class UsageStorageService extends EventEmitter {
           selectedModelName: record.selectedModelName || null,
           outgoingApiType: record.outgoingApiType || null,
           reasoningEffort: record.reasoningEffort || null,
+          // Per-key label of the selected provider key. Empty when on
+          // the legacy single api_key path; the Logs UI renders null
+          // as 'default' for human readability.
+          selectedKeyLabel: record.selectedKeyLabel || null,
           startTime: record.startTime || Date.now(),
           durationMs: null, // null indicates pending/in-flight
           responseStatus: 'pending',
@@ -266,6 +270,8 @@ export class UsageStorageService extends EventEmitter {
         if (record.incomingModelAlias) updateSet.incomingModelAlias = record.incomingModelAlias;
         if (record.apiKey) updateSet.apiKey = record.apiKey;
         if (record.attribution !== undefined) updateSet.attribution = record.attribution;
+        if (record.selectedKeyLabel !== undefined)
+          updateSet.selectedKeyLabel = record.selectedKeyLabel;
 
         await this.ensureDb()
           .update(this.schema.requestUsage)
@@ -647,6 +653,7 @@ export class UsageStorageService extends EventEmitter {
           allAttemptedProviders: schema.requestUsage.allAttemptedProviders,
           outgoingApiType: schema.requestUsage.outgoingApiType,
           reasoningEffort: schema.requestUsage.reasoningEffort,
+          selectedKeyLabel: schema.requestUsage.selectedKeyLabel,
           tokensInput: schema.requestUsage.tokensInput,
           tokensOutput: schema.requestUsage.tokensOutput,
           tokensReasoning: schema.requestUsage.tokensReasoning,
@@ -707,6 +714,7 @@ export class UsageStorageService extends EventEmitter {
         allAttemptedProviders: row.allAttemptedProviders,
         outgoingApiType: row.outgoingApiType,
         reasoningEffort: row.reasoningEffort,
+        selectedKeyLabel: row.selectedKeyLabel,
         tokensInput: row.tokensInput,
         tokensOutput: row.tokensOutput,
         tokensReasoning: row.tokensReasoning,

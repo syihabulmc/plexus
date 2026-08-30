@@ -190,8 +190,34 @@ async function main() {
   }
   logger.warn(`Re-keyed ${mcpCount} MCP server(s)`);
 
+  // ─── Provider Keys ──────────────────────────────────────────────
+  // Re-encrypt provider_keys.apiKey and managementKey columns. Uses
+  // reEncryptNullable so null managementKey values are preserved (the
+  // null-crash bug fixed in plexus-severles commit 0e794609). Each row
+  // is updated with a single UPDATE even when both fields change.
+  let providerKeyCount = 0;
+  const schemaAny = schema as any;
+  if (schemaAny.providerKeys) {
+    const providerKeyRows = await db.select().from(schemaAny.providerKeys);
+    for (const row of providerKeyRows) {
+      const updates: Record<string, string | null> = {};
+      const newApi = reEncryptNullable(row.apiKey, oldKey, newKey);
+      if (newApi !== row.apiKey) updates.apiKey = newApi;
+      const newMgmt = reEncryptNullable(row.managementKey, oldKey, newKey);
+      if (newMgmt !== row.managementKey) updates.managementKey = newMgmt;
+      if (Object.keys(updates).length > 0) {
+        await db
+          .update(schemaAny.providerKeys)
+          .set(updates)
+          .where(eq(schemaAny.providerKeys.id, row.id));
+        providerKeyCount++;
+      }
+    }
+  }
+  logger.warn(`Re-keyed ${providerKeyCount} provider-key row(s)`);
+
   logger.warn(
-    `Re-key complete. Total: ${totalReKeyed + oauthCount + providerCount + mcpCount} record(s). ` +
+    `Re-key complete. Total: ${totalReKeyed + oauthCount + providerCount + mcpCount + providerKeyCount} record(s). ` +
       'Update your ENCRYPTION_KEY env var to the new key before restarting.'
   );
 }

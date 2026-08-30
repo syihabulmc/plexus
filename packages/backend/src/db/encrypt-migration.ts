@@ -136,5 +136,49 @@ export async function runEncryptionMigration(): Promise<void> {
     throw error;
   }
 
+  // ─── Provider Keys ──────────────────────────────────────────────
+  // Encrypt plaintext apiKey + managementKey columns in provider_keys.
+  // Idempotent: rows whose value already starts with `enc:v1:` are
+  // skipped. Required so that the new feature can read encrypted values
+  // via ConfigRepository.rowToProviderKeyConfig.
+  try {
+    const schema = getSchema() as any;
+    if (schema.providerKeys) {
+      let providerKeyCount = 0;
+      const providerKeyRows = await db.select().from(schema.providerKeys);
+      for (const row of providerKeyRows) {
+        const updates: Record<string, string | null> = {};
+        if (row.apiKey && !isEncrypted(row.apiKey)) {
+          updates.apiKey = encryptField(row.apiKey);
+        }
+        if (row.managementKey && !isEncrypted(row.managementKey)) {
+          updates.managementKey = encryptField(row.managementKey);
+        }
+        if (Object.keys(updates).length > 0) {
+          await db
+            .update(schema.providerKeys)
+            .set(updates as any)
+            .where(eq(schema.providerKeys.id, row.id));
+          providerKeyCount++;
+        }
+      }
+      logger.debug(`Encrypted ${providerKeyCount} provider-key field(s)`);
+    } else {
+      // The provider_keys table is not part of the schema (this is a
+      // pre-feature database). Skip silently — same pattern as the
+      // mcp_keys block above.
+      logger.debug('provider_keys table not present, skipping');
+    }
+  } catch (error) {
+    // The provider_keys block should not abort startup. Log a warning
+    // so any unexpected error (corrupt row, permission denied, etc.)
+    // surfaces in the operator's logs rather than failing silently
+    // like the previous version did.
+    logger.warn(
+      'Failed to encrypt provider_keys rows; some keys may remain plaintext',
+      error
+    );
+  }
+
   logger.debug('Encryption migration completed successfully');
 }

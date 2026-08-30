@@ -3,6 +3,13 @@ import type { UnifiedChatRequest } from '../../types/unified';
 interface StickyEntry {
   provider: string;
   model: string;
+  // Per-key sticky: the conversation sticks to a specific API key, not just
+  // a specific (provider, model) tuple. When the stored keyId is on
+  // cooldown, the dispatcher's normal failover path rotates to the next
+  // healthy key (and the sticky entry is updated to the new key). The
+  // user's design intent is "treat each key as a different provider" so
+  // per-key stickiness matches that model.
+  keyId?: string;
 }
 
 /**
@@ -69,12 +76,13 @@ export class StickySessionManager {
     apiType: string,
     sessionKey: string,
     provider: string,
-    model: string
+    model: string,
+    keyId?: string
   ): void {
     const key = StickySessionManager.makeKey(alias, apiType, sessionKey);
     // Delete first so re-setting refreshes recency.
     this.entries.delete(key);
-    this.entries.set(key, { provider, model });
+    this.entries.set(key, { provider, model, keyId });
     if (this.entries.size > StickySessionManager.MAX_ENTRIES) {
       const oldest = this.entries.keys().next().value;
       if (oldest !== undefined) {

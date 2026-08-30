@@ -162,6 +162,7 @@ export async function registerTranscriptionsRoute(
         provider: unifiedResponse.plexus?.provider,
         selectedModelName: unifiedResponse.plexus?.model,
         canonicalModelName: unifiedResponse.plexus?.canonicalModel,
+        selectedKeyLabel: unifiedResponse.plexus?.selectedKeyLabel,
       });
 
       // Record usage

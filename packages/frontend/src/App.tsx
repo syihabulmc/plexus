@@ -6,6 +6,7 @@ import { Logs } from './pages/Logs';
 import { Providers } from './pages/Providers';
 import { Models } from './pages/Models';
 import { Keys } from './pages/Keys';
+import { ProviderKeys } from './pages/ProviderKeys';
 import { Config } from './pages/Config';
 import { SystemLogs } from './pages/SystemLogs';
 import { Debug } from './pages/Debug';
@@ -84,6 +85,14 @@ const AppRoutes = () => {
                   element={
                     <ProtectedRoute requireAdmin>
                       <Keys />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/provider-keys"
+                  element={
+                    <ProtectedRoute requireAdmin>
+                      <ProviderKeys />
                     </ProtectedRoute>
                   }
                 />

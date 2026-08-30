@@ -1,4 +1,5 @@
-import { eq, and, sql, inArray, isNotNull } from 'drizzle-orm';
+import { eq, and, sql, inArray, isNotNull, asc, or, isNull } from 'drizzle-orm';
+import { randomUUID } from 'crypto';
 import { getDatabase, getSchema, getCurrentDialect } from './client';
 import { logger } from '../utils/logger';
 import {
@@ -12,6 +13,7 @@ import {
 } from '../utils/encryption';
 import type {
   ProviderConfig,
+  ProviderKeyConfig,
   ModelConfig,
   KeyConfig,
   QuotaDefinition,
@@ -348,6 +350,10 @@ export class ConfigRepository {
     await this.db().delete(schema.modelAliasTargets);
     await this.db().delete(schema.providerModels);
     await this.db().delete(schema.modelAliases);
+    // providerKeys must be deleted before providers (FK cascade)
+    if (schema.providerKeys) {
+      await this.db().delete(schema.providerKeys);
+    }
     await this.db().delete(schema.providers);
     await this.db().delete(schema.customCheckers);
     await this.db().delete(schema.apiKeys);
@@ -576,6 +582,229 @@ export class ConfigRepository {
       // Delete provider and its provider_models, but retain model_alias_targets
       await this.db().delete(schema.providers).where(eq(schema.providers.slug, slug));
     }
+  }
+
+  // ─── Provider Keys ──────────────────────────────────────────────
+
+  /**
+   * All provider_keys rows, decrypted. Used by ConfigService.doRebuild to
+   * attach `api_keys` to each `providers[slug]` and to emit per-key quota
+   * configs. Order is not guaranteed — call sites sort by priority as needed.
+   */
+  async getAllProviderKeys(): Promise<ProviderKeyConfig[]> {
+    const schema = this.schema();
+    if (!schema.providerKeys) return [];
+    const rows = await this.db().select().from(schema.providerKeys);
+    return rows.map((row: any) => this.rowToProviderKeyConfig(row));
+  }
+
+  /**
+   * All keys for a single provider (by slug or numeric id), ordered by
+   * priority ascending (lowest = highest precedence in selectProviderKey).
+   */
+  async getProviderKeys(providerRef: string): Promise<ProviderKeyConfig[]> {
+    const resolved = await this.resolveProviderId(providerRef);
+    if (resolved === undefined) return [];
+    const schema = this.schema();
+    if (!schema.providerKeys) return [];
+    const rows = await this.db()
+      .select()
+      .from(schema.providerKeys)
+      .where(eq(schema.providerKeys.providerId, resolved))
+      .orderBy(asc(schema.providerKeys.priority));
+    return rows.map((row: any) => this.rowToProviderKeyConfig(row));
+  }
+
+  /**
+   * One-time backfill: assign a UUID label to any row whose label is empty
+   * or NULL. Called by ConfigService.doRebuild so the usage log can always
+   * identify which key served a request. Idempotent.
+   */
+  async backfillEmptyKeyLabels(): Promise<number> {
+    const schema = this.schema();
+    if (!schema.providerKeys) return 0;
+    const empty = await this.db()
+      .select({ id: schema.providerKeys.id })
+      .from(schema.providerKeys)
+      .where(or(isNull(schema.providerKeys.label), eq(schema.providerKeys.label, '')));
+    if (empty.length === 0) return 0;
+    const timestamp = new Date().toISOString();
+    for (const row of empty) {
+      await this.db()
+        .update(schema.providerKeys)
+        .set({ label: randomUUID(), updatedAt: timestamp })
+        .where(eq(schema.providerKeys.id, row.id));
+    }
+    return empty.length;
+  }
+
+  /**
+   * Upsert a provider key. Encrypts api_key and management_key. Update
+   * semantics for management_key: `undefined` keeps the existing value,
+   * `''` clears to NULL, any other value re-encrypts. Returns the decrypted
+   * ProviderKeyConfig.
+   */
+  async saveProviderKey(
+    id: string,
+    data: {
+      provider_id: string;
+      label: string;
+      api_key: string;
+      management_key?: string;
+      notes?: string;
+      enabled: boolean;
+      priority: number;
+    }
+  ): Promise<ProviderKeyConfig> {
+    const schema = this.schema();
+    if (!schema.providerKeys) {
+      throw new Error('provider_keys table not present in current schema');
+    }
+    const timestamp = new Date().toISOString();
+
+    const existing = await this.db()
+      .select()
+      .from(schema.providerKeys)
+      .where(eq(schema.providerKeys.id, id))
+      .limit(1);
+
+    const encryptedApiKey = encryptField(data.api_key);
+    const existingNotes: string | null =
+      existing.length > 0 ? (existing[0] as any).notes : null;
+    const existingMgmt: string | null =
+      existing.length > 0 ? (existing[0] as any).managementKey : null;
+
+    let storedMgmt: string | null;
+    if (data.management_key === undefined) {
+      storedMgmt = existingMgmt;
+    } else if (data.management_key === '') {
+      storedMgmt = null;
+    } else {
+      storedMgmt = encryptField(data.management_key);
+    }
+
+    // notes has the same 3-state semantics as management_key:
+    //   undefined = keep existing, '' = clear to NULL, value = set.
+    // For new rows (no existing), '' also becomes NULL to avoid storing
+    // empty strings.
+    let storedNotes: string | null;
+    if (data.notes === undefined) {
+      storedNotes = existingNotes;
+    } else if (data.notes === '') {
+      storedNotes = null;
+    } else {
+      storedNotes = data.notes;
+    }
+
+    if (existing.length > 0) {
+      await this.db()
+        .update(schema.providerKeys)
+        .set({
+          providerId: Number(data.provider_id),
+          label: data.label,
+          apiKey: encryptedApiKey,
+          managementKey: storedMgmt,
+          notes: storedNotes,
+          enabled: data.enabled ? 1 : 0,
+          priority: data.priority,
+          updatedAt: timestamp,
+        })
+        .where(eq(schema.providerKeys.id, id));
+    } else {
+      await this.db().insert(schema.providerKeys).values({
+        id,
+        providerId: Number(data.provider_id),
+        label: data.label,
+        apiKey: encryptedApiKey,
+        managementKey: storedMgmt,
+        notes: storedNotes,
+        enabled: data.enabled ? 1 : 0,
+        priority: data.priority,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    }
+
+    return {
+      id,
+      provider_id: data.provider_id,
+      label: data.label,
+      api_key: data.api_key,
+      management_key:
+        data.management_key === ''
+          ? undefined
+          : (data.management_key ?? (existingMgmt ? decryptField(existingMgmt) ?? undefined : undefined)),
+      notes:
+        data.notes === ''
+          ? undefined
+          : (data.notes ?? existingNotes ?? undefined),
+      enabled: data.enabled,
+      priority: data.priority,
+    };
+  }
+
+  /** Returns true if a row was deleted, false if the id did not exist. */
+  async deleteProviderKey(id: string): Promise<boolean> {
+    const schema = this.schema();
+    if (!schema.providerKeys) return false;
+    const result = await this.db()
+      .delete(schema.providerKeys)
+      .where(eq(schema.providerKeys.id, id));
+    const affected =
+      (result as any)?.rowsAffected ?? (result as any)?.changes ?? (result as any)?.rowCount ?? 0;
+    return Number(affected) > 0;
+  }
+
+  /**
+   * Numeric provider.id → slug. Used by the management API to expose
+   * provider_id as a slug on the wire while the DB column is a numeric FK.
+   */
+  async getProviderIdToSlugMap(): Promise<Map<string, string>> {
+    const schema = this.schema();
+    const rows = await this.db()
+      .select({ id: schema.providers.id, slug: schema.providers.slug })
+      .from(schema.providers);
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      map.set(String(row.id), row.slug);
+    }
+    return map;
+  }
+
+  /**
+   * Accepts either a numeric id (string of digits) or a slug. Returns the
+   * numeric providers.id, or undefined if neither resolves. Mirrors the
+   * behavior callers expect when a slug like "openai" is passed (Number("openai")
+   * = NaN, so a naive `Number(ref)` lookup would silently match nothing).
+   */
+  async resolveProviderId(ref: string): Promise<number | undefined> {
+    if (/^\d+$/.test(ref)) {
+      const n = Number(ref);
+      if (Number.isFinite(n)) return n;
+    }
+    const schema = this.schema();
+    const rows = await this.db()
+      .select({ id: schema.providers.id })
+      .from(schema.providers)
+      .where(eq(schema.providers.slug, ref))
+      .limit(1);
+    return rows[0]?.id;
+  }
+
+  /** Decrypt a single provider_keys row to the runtime config shape. */
+  private rowToProviderKeyConfig(row: any): ProviderKeyConfig {
+    return {
+      id: row.id,
+      provider_id: String(row.providerId),
+      label: row.label,
+      api_key: decryptField(row.apiKey) ?? '',
+      management_key: row.managementKey
+        ? (decryptField(row.managementKey) ?? undefined)
+        : undefined,
+      notes: row.notes ?? undefined,
+      enabled: row.enabled === 1,
+      priority: row.priority,
+    };
   }
 
   async getProviderModels(providerSlug: string): Promise<

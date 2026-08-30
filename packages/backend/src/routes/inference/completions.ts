@@ -110,6 +110,7 @@ export async function registerCompletionsRoute(
         selectedModelName: unifiedResponse.plexus?.model,
         canonicalModelName: unifiedResponse.plexus?.canonicalModel,
         reasoningEffort: usageRecord.reasoningEffort,
+        selectedKeyLabel: unifiedResponse.plexus?.selectedKeyLabel,
       });
 
       const shouldEstimateTokens = unifiedResponse.plexus?.config?.estimateTokens || false;

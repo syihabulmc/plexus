@@ -301,6 +301,10 @@ export class Dispatcher {
       provider: route.provider,
       selectedModelName: route.model,
       canonicalModelName: route.canonicalModel,
+      // selectedKeyLabel is set by setupProviderHeaders in
+      // standard-attempt-request.ts before this update fires, so the
+      // in-flight usage row carries the real label (not 'default').
+      selectedKeyLabel: route.selectedKeyLabel,
     });
   }
 
@@ -324,7 +328,8 @@ export class Dispatcher {
       request.incomingApiType || 'chat',
       sessionKey,
       route.provider,
-      route.model
+      route.model,
+      route.selectedKeyId
     );
   }
 
@@ -549,18 +554,18 @@ export class Dispatcher {
     }
   }
 
-  setupHeaders(
+  async setupHeaders(
     route: RouteResult,
     apiType: string,
     request: UnifiedChatRequest
-  ): Record<string, string> {
+  ): Promise<Record<string, string>> {
     // Native OAuth routes carry fully-built wire headers (Bearer token + CC
     // fingerprint headers) stashed during payload preparation.
     const nativeOAuth = (route as any)[NATIVE_OAUTH_STASH];
     if (nativeOAuth?.headers) {
       return { ...nativeOAuth.headers };
     }
-    return setupProviderHeaders(route, apiType, request);
+    return await setupProviderHeaders(route, apiType, request);
   }
 
   private getApiMetadata(metadata: Record<string, any>): Record<string, any> {
@@ -832,6 +837,10 @@ export class Dispatcher {
       providerDiscount: route.config.discount,
       canonicalModel: route.canonicalModel,
       config: route.config,
+      // Per-key identity carried through the response to the response-handler
+      // and onward to the usage record / in-flight update.
+      selectedKeyId: route.selectedKeyId,
+      selectedKeyLabel: route.selectedKeyLabel,
     };
   }
 

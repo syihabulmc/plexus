@@ -456,6 +456,13 @@
       "when": 1788056024543,
       "tag": "0064_add_reasoning_effort_to_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "6",
+      "when": 1788700000000,
+      "tag": "0069_test_setup",
+      "breakpoints": true
     }
   ]
 }

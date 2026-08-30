@@ -266,6 +266,10 @@ export interface UnifiedChatResponse {
     finalAttemptModel?: string;
     allAttemptedProviders?: string;
     retryHistory?: string;
+    // Per-key identity propagated from the dispatcher's setupProviderHeaders
+    // to the response handler and onward to the usage record.
+    selectedKeyId?: string;
+    selectedKeyLabel?: string;
   };
   reasoning_content?: string | null;
   thinking?: {
@@ -428,6 +432,12 @@ export interface UnifiedEmbeddingsResponse {
     providerDiscount?: number;
     canonicalModel?: string;
     config?: any;
+    // Dispatcher retry/routing metadata
+    attemptCount?: number;
+    retryHistory?: any;
+    // Per-key identity propagated from the dispatcher's setupProviderHeaders.
+    selectedKeyId?: string;
+    selectedKeyLabel?: string;
   };
   rawResponse?: any;
 }
@@ -487,10 +497,13 @@ export interface UnifiedTranscriptionResponse {
     providerDiscount?: number;
     canonicalModel?: string;
     config?: any;
+    // Dispatcher retry/routing metadata
     attemptCount?: number;
     retryHistory?: any;
+    // Per-key identity propagated from the dispatcher's setupProviderHeaders.
+    selectedKeyId?: string;
+    selectedKeyLabel?: string;
   };
-
   rawResponse?: any;
 }
 
@@ -526,6 +539,12 @@ export interface UnifiedSpeechResponse {
     providerDiscount?: number;
     canonicalModel?: string;
     config?: any;
+    // Dispatcher retry/routing metadata
+    attemptCount?: number;
+    retryHistory?: any;
+    // Per-key identity propagated from the dispatcher's setupProviderHeaders.
+    selectedKeyId?: string;
+    selectedKeyLabel?: string;
   };
   rawResponse?: any;
   isStreamed?: boolean;
@@ -569,6 +588,12 @@ export interface UnifiedImageGenerationResponse {
     providerDiscount?: number;
     canonicalModel?: string;
     config?: any;
+    // Dispatcher retry/routing metadata
+    attemptCount?: number;
+    retryHistory?: any;
+    // Per-key identity propagated from the dispatcher's setupProviderHeaders.
+    selectedKeyId?: string;
+    selectedKeyLabel?: string;
   };
   rawResponse?: any;
 }
@@ -616,6 +641,12 @@ export interface UnifiedImageEditResponse {
     providerDiscount?: number;
     canonicalModel?: string;
     config?: any;
+    // Dispatcher retry/routing metadata
+    attemptCount?: number;
+    retryHistory?: any;
+    // Per-key identity propagated from the dispatcher's setupProviderHeaders.
+    selectedKeyId?: string;
+    selectedKeyLabel?: string;
   };
   rawResponse?: any;
 }

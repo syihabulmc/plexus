@@ -5,6 +5,7 @@ import type { RouteResult } from '../routing/router';
 import type { RetryAttemptRecord } from './dispatcher-types';
 import type { StallConfig } from '../inspectors/stall-inspector';
 import { CooldownManager } from '../runtime/cooldown-manager';
+import { autoDisableOnQuotaError } from './auto-disable';
 import type { RequestManagerHost } from './request-manager';
 import {
   createAdvisorResultStripState,
@@ -122,7 +123,18 @@ export async function executeStandardAttempt(
 
   const incomingApi = currentRequest.incomingApiType || 'unknown';
   const url = host.buildRequestUrl(route, transformer, requestWithTargetModel, targetApiType);
-  const headers = host.setupHeaders(route, targetApiType, requestWithTargetModel);
+  // setupProviderHeaders is now async (it calls selectProviderKey which
+  // reads cooldown state from the DB). Await the headers so the
+  // route.selectedKeyId/Label is stamped before the routing update is
+  // emitted (see emitRoutingUpdate below) — otherwise the in-flight
+  // usage row would carry a null label that the Logs UI renders as
+  // "default" until the final update rewrites it.
+  const headers = await host.setupHeaders(route, targetApiType, requestWithTargetModel);
+  // Emit the routing update NOW (not before) so the in-flight label
+  // and keyId are populated. Previously this was called by the
+  // request-manager BEFORE executeStandardAttempt ran, which made
+  // the in-flight label always null.
+  host.emitRoutingUpdate(currentRequest.requestId, route);
 
   logger.info(
     `Dispatching ${currentRequest.model} to ${route.provider}:${route.model} ${incomingApi} <-> ${transformer.name}`
@@ -219,7 +231,8 @@ export async function executeStandardAttempt(
             CooldownManager.getInstance().markProviderStallFailure(
               route.provider,
               route.model,
-              host.formatFailureReason(stallError)
+              host.formatFailureReason(stallError),
+              route.selectedKeyId
             );
             host.saveIntermediateError(
               currentRequest.requestId,
@@ -418,8 +431,10 @@ export async function executeStandardAttempt(
               route.provider,
               route.model,
               undefined,
-              host.formatFailureReason(e, true)
+              host.formatFailureReason(e, true),
+              route.selectedKeyId
             );
+            await autoDisableOnQuotaError(e, route);
           }
           host.saveIntermediateError(currentRequest.requestId, targetApiType || 'chat', e);
           logger.warn(
@@ -467,15 +482,18 @@ export async function executeStandardAttempt(
           CooldownManager.getInstance().markProviderStallFailure(
             route.provider,
             route.model,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
         } else {
           CooldownManager.getInstance().markProviderFailure(
             route.provider,
             route.model,
             (error as any).cooldownDuration,
-            host.formatFailureReason(error)
+            host.formatFailureReason(error),
+            route.selectedKeyId
           );
+          await autoDisableOnQuotaError(error, route);
         }
         host.saveIntermediateError(currentRequest.requestId, targetApiType || 'chat', error);
         logger.warn(
@@ -490,8 +508,10 @@ export async function executeStandardAttempt(
           route.provider,
           route.model,
           (error as any).cooldownDuration,
-          host.formatFailureReason(error)
+          host.formatFailureReason(error),
+          route.selectedKeyId
         );
+        await autoDisableOnQuotaError(error, route);
       }
 
       doRelease();
@@ -548,7 +568,7 @@ export async function executeStandardAttempt(
       isDescriptorRequest: (currentRequest as any)._isVisionDescriptorRequest,
       visionFallthroughModel: (currentRequest as any)._visionFallthroughModel,
     });
-    CooldownManager.getInstance().markProviderSuccess(route.provider, route.model);
+    CooldownManager.getInstance().markProviderSuccess(route.provider, route.model, route.selectedKeyId);
     host.recordStickySession(sessionKey, route, currentRequest);
     host.appendSuccessAttempt(retryHistory, route, targetApiType);
     host.attachAttemptMetadata(
@@ -638,7 +658,7 @@ export async function executeStandardAttempt(
     // ... (this part is fine)
   }
 
-  CooldownManager.getInstance().markProviderSuccess(route.provider, route.model);
+  CooldownManager.getInstance().markProviderSuccess(route.provider, route.model, route.selectedKeyId);
   host.recordStickySession(sessionKey, route, currentRequest);
   host.appendSuccessAttempt(retryHistory, route, targetApiType);
   host.attachAttemptMetadata(

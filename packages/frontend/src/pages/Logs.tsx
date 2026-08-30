@@ -351,7 +351,8 @@ const MobileLogRow = React.memo(
               ·
             </span>
             <span className="min-w-0 truncate font-normal text-text-secondary">
-              {log.provider || '-'}:{log.selectedModelName || '-'}
+              {log.provider || '-'}:{log.selectedKeyLabel || 'default'} ·{' '}
+              {log.selectedModelName || '-'}
             </span>
           </div>
           <span
@@ -849,9 +850,10 @@ const DesktopLogRow = React.memo(
               <span
                 className="min-w-0 truncate"
                 style={{ color: 'var(--color-text-secondary)', fontSize: '0.9em' }}
-                title={`${log.provider || '-'}:${log.selectedModelName || '-'}`}
+                title={`${log.provider || '-'}:${log.selectedKeyLabel || 'default'} · ${log.selectedModelName || '-'}`}
               >
-                {log.provider || '-'}:{log.selectedModelName || '-'}
+                {log.provider || '-'}:{log.selectedKeyLabel || 'default'} ·{' '}
+                {log.selectedModelName || '-'}
               </span>
               {log.selectedModelName && log.selectedModelName !== '-' && (
                 <button

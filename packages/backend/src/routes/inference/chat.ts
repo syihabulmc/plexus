@@ -120,6 +120,7 @@ export async function registerChatRoute(
         selectedModelName: unifiedResponse.plexus?.model,
         canonicalModelName: unifiedResponse.plexus?.canonicalModel,
         reasoningEffort: usageRecord.reasoningEffort,
+        selectedKeyLabel: unifiedResponse.plexus?.selectedKeyLabel,
       });
 
       // Determine if token estimation is needed

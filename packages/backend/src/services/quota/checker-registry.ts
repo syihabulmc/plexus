@@ -13,6 +13,14 @@ import {
 export interface MeterContext {
   checkerId: string;
   provider: string;
+  /**
+   * When the checker is bound to a specific provider key (per-key
+   * checker, id `${provider}:key:${keyId}`), this is the key's id.
+   * Used by the scheduler to thread the keyId through to the cooldown
+   * call so a per-key meter exhaustion targets only that key's
+   * cooldown slot. Undefined for provider-level checkers.
+   */
+  keyId?: string;
   options: Record<string, unknown>;
   getOption<T>(key: string, defaultValue: T): T;
   requireOption<T>(key: string): T;
@@ -191,11 +199,13 @@ function isBalanceExhausted(remaining: number | undefined): boolean {
 export function createMeterContext(
   checkerId: string,
   provider: string,
-  options: Record<string, unknown>
+  options: Record<string, unknown>,
+  keyId?: string
 ): MeterContext {
   return {
     checkerId,
     provider,
+    keyId,
     options,
 
     getOption<T>(key: string, defaultValue: T): T {

@@ -67,3 +67,28 @@ export const providers = pgTable(
     slugIdx: index('idx_providers_slug').on(table.slug),
   })
 );
+
+export const providerKeys = pgTable(
+  'provider_keys',
+  {
+    id: text('id').primaryKey(),
+    providerId: integer('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    label: text('label').notNull().default(''),
+    apiKey: text('api_key').notNull(),
+    managementKey: text('management_key'),
+    notes: text('notes'),
+    enabled: integer('enabled').notNull().default(1),
+    priority: integer('priority').notNull().default(0),
+    createdAt: text('created_at').notNull().default('now()'),
+    updatedAt: text('updated_at').notNull().default('now()'),
+  },
+  (table) => ({
+    providerEnabledPriorityIdx: index('idx_provider_keys_lookup').on(
+      table.providerId,
+      table.enabled,
+      table.priority
+    ),
+  })
+);

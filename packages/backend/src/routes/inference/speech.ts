@@ -111,6 +111,7 @@ export async function registerSpeechRoute(
         provider: unifiedResponse.plexus?.provider,
         selectedModelName: unifiedResponse.plexus?.model,
         canonicalModelName: unifiedResponse.plexus?.canonicalModel,
+        selectedKeyLabel: unifiedResponse.plexus?.selectedKeyLabel,
       });
 
       usageRecord.provider = unifiedResponse.plexus?.provider;

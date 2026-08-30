@@ -17,6 +17,11 @@ export interface UsageRecord {
   allAttemptedProviders: string | null;
   outgoingApiType: string | null;
   reasoningEffort?: string | null;
+  // Per-key label of the selected provider key for this request.
+  // E.g. "prod-key-A" for a multi-key provider, or "default" for the
+  // legacy single api_key path. Used by the Logs page and Dashboard to
+  // attribute each request to a specific API key.
+  selectedKeyLabel?: string | null;
   tokensInput: number | null;
   tokensOutput: number | null;
   tokensReasoning: number | null;

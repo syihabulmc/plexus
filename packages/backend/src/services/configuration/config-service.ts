@@ -511,6 +511,38 @@ export class ConfigService {
       Object.entries(allSettings).filter(([k]) => !k.includes('.'))
     );
 
+    // ─── Provider keys (multi-key) ────────────────────────────────
+    // 1. Backfill any pre-feature keys with empty labels so the usage log
+    //    can always identify which key served a request. Idempotent.
+    // 2. Group keys by provider slug, filter enabled, sort by priority
+    //    ascending (lowest number = first in selectProviderKey).
+    // 3. Attach `api_keys` to each provider so the dispatcher's
+    //    `route.config.api_keys` and the per-key quota emission can find
+    //    them.
+    await this.repo.backfillEmptyKeyLabels();
+    const allProviderKeys = await this.repo.getAllProviderKeys();
+    const idToSlug = await this.repo.getProviderIdToSlugMap();
+    const keysBySlug = new Map<string, typeof allProviderKeys>();
+    for (const k of allProviderKeys) {
+      const slug = idToSlug.get(k.provider_id);
+      if (!slug) continue;
+      const list = keysBySlug.get(slug) ?? [];
+      list.push(k);
+      keysBySlug.set(slug, list);
+    }
+    for (const [slug, ks] of keysBySlug) {
+      keysBySlug.set(
+        slug,
+        ks.filter((k) => k.enabled).sort((a, b) => a.priority - b.priority)
+      );
+    }
+    for (const [slug, config] of Object.entries(providers)) {
+      const ks = keysBySlug.get(slug);
+      if (ks && ks.length > 0) {
+        (config as any).api_keys = ks;
+      }
+    }
+
     // Build quota configs from providers (same logic as buildProviderQuotaConfigs)
     const quotas = this.buildProviderQuotaConfigs(providers);
 
@@ -605,6 +637,56 @@ export class ConfigService {
         intervalMinutes: quotaChecker.intervalMinutes,
         options,
       });
+
+      // Per-key checkers: when a provider has multiple api_keys (attached
+      // by doRebuild), emit one checker per key. Each carries its own
+      // apiKey (and optional managementKey for OpenRouter-style checkers)
+      // so quota usage and cooldown are tracked per key.
+      const apiKeys = (providerConfig as any).api_keys as
+        | Array<{ id: string; api_key: string; enabled?: boolean; management_key?: string }>
+        | undefined;
+      if (apiKeys && apiKeys.length > 0) {
+        for (const keyConfig of apiKeys) {
+          if (keyConfig.enabled === false) continue;
+          const keyApiKey = keyConfig.api_key?.trim();
+          if (!keyApiKey || keyApiKey.toLowerCase() === 'oauth') continue;
+
+          const keyCheckerId = `${providerId}:key:${keyConfig.id}`;
+          if (seenIds.has(keyCheckerId)) continue;
+          seenIds.add(keyCheckerId);
+
+          // Match the file-based buildProviderQuotaConfigs in config.ts:
+          // inherit the provider's oauth settings, account id, and
+          // allow_100_percent_utilization so per-key checkers behave the
+          // same as the provider-level checker would.
+          const keyOptions: Record<string, unknown> = {
+            ...(quotaChecker.options ?? {}),
+            apiKey: keyApiKey,
+            ...(keyConfig.management_key?.trim()
+              ? { managementKey: keyConfig.management_key.trim() }
+              : {}),
+            ...(providerConfig.oauth_provider
+              ? { oauthProvider: providerConfig.oauth_provider }
+              : {}),
+            ...(providerConfig.oauth_account
+              ? { oauthAccountId: providerConfig.oauth_account }
+              : {}),
+            ...(providerConfig.allow_100_percent_utilization !== undefined
+              ? { allow100PercentUtilization: providerConfig.allow_100_percent_utilization }
+              : {}),
+          };
+
+          quotas.push({
+            id: keyCheckerId,
+            provider: providerId,
+            keyId: keyConfig.id,
+            type: quotaChecker.type,
+            enabled: true,
+            intervalMinutes: quotaChecker.intervalMinutes,
+            options: keyOptions,
+          });
+        }
+      }
     }
 
     return quotas;

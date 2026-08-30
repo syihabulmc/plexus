@@ -61,6 +61,8 @@ export const requestUsage = pgTable(
     kwhUsed: real('kwh_used'),
     // Provider-reported cost (actual cost from provider, e.g. from SSE `: cost` comments)
     providerReportedCost: real('provider_reported_cost'),
+    // Per-key label of the selected provider key (e.g. "prod-key-A" or "default" for legacy single api_key)
+    selectedKeyLabel: text('selected_key_label'),
   },
   (table) => ({
     dateIdx: index('idx_request_usage_date').on(table.date),
@@ -68,5 +70,6 @@ export const requestUsage = pgTable(
     requestIdIdx: index('idx_request_usage_request_id').on(table.requestId),
     clientRequestIdIdx: index('idx_request_usage_client_request_id').on(table.clientRequestId),
     apiKeyIdx: index('idx_request_usage_api_key').on(table.apiKey, table.startTime),
+    selectedKeyLabelIdx: index('idx_request_usage_selected_key_label').on(table.selectedKeyLabel),
   })
 );

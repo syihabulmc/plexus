@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { setupProviderHeaders } from '../provider-request-headers';
 
 describe('setupProviderHeaders', () => {
-  test('forwards session affinity headers to a Messages provider', () => {
-    const headers = setupProviderHeaders(
+  test('forwards session affinity headers to a Messages provider', async () => {
+    const headers = await setupProviderHeaders(
       {
         provider: 'wisgate',
         config: { api_key: 'provider-key' },
@@ -30,8 +30,8 @@ describe('setupProviderHeaders', () => {
     expect(headers['anthropic-beta']).toBe('prompt-caching-2024-07-31');
   });
 
-  test('does not forward Anthropic beta features to non-Messages providers', () => {
-    const headers = setupProviderHeaders(
+  test('does not forward Anthropic beta features to non-Messages providers', async () => {
+    const headers = await setupProviderHeaders(
       {
         provider: 'openai',
         config: { api_key: 'provider-key' },

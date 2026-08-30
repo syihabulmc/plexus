@@ -42,6 +42,14 @@ export interface MeterCheckResult {
   checkerId: string;
   checkerType: string;
   provider: string;
+  /**
+   * When the checker was bound to a specific provider key (per-key
+   * checker, id `${provider}:key:${keyId}`), this carries the keyId
+   * through. The QuotaScheduler uses it to target the per-key cooldown
+   * slot on exhaustion so other keys on the same provider are
+   * unaffected.
+   */
+  keyId?: string;
   checkedAt: string; // ISO-8601
   success: boolean;
   error?: string;

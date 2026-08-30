@@ -27,6 +27,7 @@ export const meterSnapshots = pgTable(
     errorMessage: text('error_message'),
     checkedAt: bigint('checked_at', { mode: 'number' }).notNull(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    keyId: text('key_id'),
   },
   (table) => ({
     checkerMeterCheckedIdx: index('idx_meter_checker_meter_checked').on(
@@ -36,5 +37,6 @@ export const meterSnapshots = pgTable(
     ),
     providerCheckedIdx: index('idx_meter_provider_checked').on(table.provider, table.checkedAt),
     checkedAtIdx: index('idx_meter_checked_at').on(table.checkedAt),
+    keyCheckedIdx: index('idx_meter_key_checked').on(table.keyId, table.checkedAt),
   })
 );

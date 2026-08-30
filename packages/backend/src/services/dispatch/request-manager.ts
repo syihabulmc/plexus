@@ -6,6 +6,7 @@ import { TransformerFactory } from './transformer-factory';
 import { resolveAdapters } from './adapter-resolver';
 import { DebugManager } from '../observability/debug-manager';
 import { CooldownManager } from '../runtime/cooldown-manager';
+import { autoDisableOnQuotaError } from './auto-disable';
 import { admitProvider } from '../runtime/provider-admission';
 import { enforceContextLimit } from '../models/enforce-limits';
 import { getGlobalStallConfig, resolveStallConfig } from '../../utils/stall';
@@ -52,7 +53,7 @@ export interface RequestManagerHost {
   recordStickySession(...args: any[]): void;
   saveIntermediateError(...args: any[]): void;
   selectTargetApiType(...args: any[]): { targetApiType?: string; selectionReason: string };
-  setupHeaders(...args: any[]): Record<string, string>;
+  setupHeaders(...args: any[]): Promise<Record<string, string>>;
   transformRequestPayload(...args: any[]): Promise<{ payload: any; bypassTransformation: boolean }>;
 }
 
@@ -136,7 +137,10 @@ export class RequestManager {
       attemptedProviders.push(`${route.provider}/${route.model}`);
       const doRelease = admission.release;
 
-      host.emitRoutingUpdate(currentRequest.requestId, route);
+      // emitRoutingUpdate is now called inside executeStandardAttempt
+      // AFTER setupHeaders has resolved the selected key. The previous
+      // call here was a no-op for selectedKeyLabel (always null) because
+      // setupHeaders hadn't run yet.
 
       try {
         // Determine Target API Type
@@ -303,15 +307,18 @@ export class RequestManager {
             CooldownManager.getInstance().markProviderStallFailure(
               route.provider,
               route.model,
-              host.formatFailureReason(effectiveError)
+              host.formatFailureReason(effectiveError),
+              route.selectedKeyId
             );
           } else {
             CooldownManager.getInstance().markProviderFailure(
               route.provider,
               route.model,
               undefined,
-              host.formatFailureReason(effectiveError)
+              host.formatFailureReason(effectiveError),
+              route.selectedKeyId
             );
+            await autoDisableOnQuotaError(effectiveError, route);
           }
         }
         await host.recordAttemptMetric(route, currentRequest.requestId, false, {
