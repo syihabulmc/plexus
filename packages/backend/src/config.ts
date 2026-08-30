@@ -775,6 +775,10 @@ const QuotaConfigSchema = z.object({
   // disabled/replaced independently. Used by QuotaScheduler to thread the
   // keyId through MeterContext so the key-level cooldown can be targeted.
   keyId: z.string().optional(),
+  // Human-readable label of the provider key, populated from
+  // `api_keys[].label` so the Quotas UI can render "Provider - Label"
+  // instead of the raw `<provider>:key:<uuid>` checkerId.
+  keyLabel: z.string().optional(),
   enabled: z.boolean().default(true),
   intervalMinutes: z.number().min(1).default(30),
   options: z.record(z.string(), z.any()).default({}),
@@ -1207,6 +1211,7 @@ function buildProviderQuotaConfigs(config: z.infer<typeof RawPlexusConfigSchema>
           id: keyCheckerId,
           provider: providerId,
           keyId: keyConfig.id,
+          keyLabel: keyConfig.label,
           type: checkerType,
           enabled: true,
           intervalMinutes: quotaChecker.intervalMinutes,

@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { QuotaCheckerInfo } from '../../types/quota';
 import { formatMeterValue } from './MeterValue';
-import { getCheckerDisplayName } from './checker-presentation';
+import { getCheckerDisplayName, getCheckerIdentityLabel } from './checker-presentation';
 import { useCurrency } from '../../lib/CurrencyContext';
 
 interface CompactBalancesCardProps {
@@ -38,6 +38,7 @@ export const CompactBalancesCard: React.FC<CompactBalancesCardProps> = ({
           quota.checkerId,
           displayNameMap
         );
+        const identityLabel = getCheckerIdentityLabel(quota);
         const balanceMeter = quota.meters.find((m) => m.kind === 'balance');
         const remaining = balanceMeter?.remaining;
         const formattedBalance =
@@ -47,7 +48,9 @@ export const CompactBalancesCard: React.FC<CompactBalancesCardProps> = ({
 
         return (
           <div key={quota.checkerId} className="flex items-center justify-between min-w-0">
-            <span className="text-xs text-text-secondary truncate">{displayName}:</span>
+            <span className="text-xs text-text-secondary truncate" title={identityLabel}>
+              {displayName}:
+            </span>
             {!quota.success ? (
               <span className="text-xs text-danger flex-shrink-0 ml-2">Error</span>
             ) : formattedBalance !== undefined ? (

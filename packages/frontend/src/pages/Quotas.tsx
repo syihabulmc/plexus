@@ -11,7 +11,7 @@ import type { QuotaCheckerInfo, Meter } from '../types/quota';
 import { CombinedBalancesCard } from '../components/quota/CombinedBalancesCard';
 import { AllowanceMeterRow } from '../components/quota/AllowanceMeterRow';
 import { MeterHistoryModal } from '../components/quota/MeterHistoryModal';
-import { getCheckerDisplayName } from '../components/quota/checker-presentation';
+import { getCheckerDisplayName, getCheckerIdentityLabel } from '../components/quota/checker-presentation';
 
 export const Quotas = () => {
   const [quotas, setQuotas] = useState<(QuotaCheckerInfo & { pending?: boolean })[]>([]);
@@ -98,6 +98,12 @@ export const Quotas = () => {
         </button>
 
         <div className="pr-8">
+          {/* Per-key identity (Provider - Label) on top so users can tell
+              per-key checkers apart at a glance. Falls back to the
+              checkerId when the identity fields are missing. */}
+          <div className="text-xs text-text-secondary mb-1 truncate">
+            {getCheckerIdentityLabel(quota)}
+          </div>
           {quota.pending ? (
             <span className="text-xs text-text-muted">Pending first check...</span>
           ) : !quota.success ? (

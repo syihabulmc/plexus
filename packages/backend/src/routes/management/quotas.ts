@@ -24,6 +24,23 @@ function getCheckerType(checkerId: string): string | undefined {
   return getConfig().quotas?.find((q) => q.id === checkerId)?.type;
 }
 
+// Identity of the quota checker: provider slug, optional keyId, optional
+// keyLabel. The Quotas UI uses these to render "Provider - Label" instead
+// of the raw `<provider>:key:<uuid>` checkerId.
+function getCheckerIdentity(checkerId: string): {
+  provider?: string;
+  keyId?: string;
+  keyLabel?: string;
+} {
+  const quota = getConfig().quotas?.find((q) => q.id === checkerId);
+  if (!quota) return {};
+  return {
+    provider: quota.provider,
+    keyId: quota.keyId,
+    keyLabel: quota.keyLabel,
+  };
+}
+
 export async function registerQuotaRoutes(
   fastify: FastifyInstance,
   quotaScheduler: QuotaScheduler
@@ -45,6 +62,7 @@ export async function registerQuotaRoutes(
           const latest = await quotaScheduler.getLatestQuota(checkerId);
           configured.push({
             ...getOAuthMetadata(checkerId),
+            ...getCheckerIdentity(checkerId),
             checkerId,
             checkerType: quota.type,
             displayName: displayNameMap.get(quota.type) ?? quota.type,
@@ -56,6 +74,7 @@ export async function registerQuotaRoutes(
         } catch (error) {
           configured.push({
             ...getOAuthMetadata(checkerId),
+            ...getCheckerIdentity(checkerId),
             checkerId,
             checkerType: quota.type,
             displayName: displayNameMap.get(quota.type) ?? quota.type,
@@ -85,6 +104,7 @@ export async function registerQuotaRoutes(
           const latest = await quotaScheduler.getLatestQuota(checkerId);
           results.push({
             ...getOAuthMetadata(checkerId),
+            ...getCheckerIdentity(checkerId),
             ...(latest ?? { success: false, meters: [] }),
             checkerId,
             checkerType: getCheckerType(checkerId),
@@ -93,6 +113,7 @@ export async function registerQuotaRoutes(
           logger.error(`Failed to get latest quota for '${checkerId}': ${error}`);
           results.push({
             ...getOAuthMetadata(checkerId),
+            ...getCheckerIdentity(checkerId),
             success: false,
             meters: [],
             error: error instanceof Error ? error.message : 'Unknown error',
@@ -115,6 +136,7 @@ export async function registerQuotaRoutes(
       const latest = await quotaScheduler.getLatestQuota(checkerId);
       return {
         ...getOAuthMetadata(checkerId),
+        ...getCheckerIdentity(checkerId),
         ...(latest ?? { success: false, meters: [] }),
         checkerId,
         checkerType: getCheckerType(checkerId),

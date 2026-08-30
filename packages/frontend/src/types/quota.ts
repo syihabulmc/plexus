@@ -24,6 +24,11 @@ export interface QuotaCheckerInfo {
   checkerId: string;
   checkerType?: string;
   provider?: string;
+  // Per-key identity for quota checkers bound to a specific provider
+  // key (multi-key providers). The Quotas UI renders these as
+  // "Provider - Label" so the user can tell per-key rows apart.
+  keyId?: string;
+  keyLabel?: string;
   checkedAt?: string;
   success: boolean;
   error?: string;

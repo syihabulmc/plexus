@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { clsx } from 'clsx';
 import { Wallet, AlertTriangle, RefreshCw } from 'lucide-react';
-import { toTitleCase } from '../../lib/format';
 import type { QuotaCheckerInfo, Meter } from '../../types/quota';
 import { Button } from '../ui/Button';
-import { getCheckerDisplayName } from './checker-presentation';
+import { getCheckerDisplayName, getCheckerIdentityLabel } from './checker-presentation';
 import { BalanceMeterRow } from './BalanceMeterRow';
 import { MeterHistoryModal } from './MeterHistoryModal';
 
@@ -36,6 +35,7 @@ export const CombinedBalancesCard: React.FC<CombinedBalancesCardProps> = ({
 
   const renderRow = (quota: QuotaCheckerInfo) => {
     const displayName = getCheckerDisplayName(quota.checkerType, quota.checkerId, displayNameMap);
+    const identityLabel = getCheckerIdentityLabel(quota);
     const balanceMeters = quota.meters.filter((m) => m.kind === 'balance');
 
     return (
@@ -46,7 +46,7 @@ export const CombinedBalancesCard: React.FC<CombinedBalancesCardProps> = ({
         <div className="flex flex-col gap-0.5 min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <Wallet size={14} className="text-info flex-shrink-0" />
-            <span className="text-sm font-semibold text-text">{toTitleCase(quota.checkerId)}</span>
+            <span className="text-sm font-semibold text-text">{identityLabel}</span>
           </div>
           <div className="text-xs text-text-muted pl-5 truncate">
             {displayName}
