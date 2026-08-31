@@ -1019,24 +1019,25 @@ const DesktopLogRow = React.memo(
           style={{ width: DESKTOP_COST_COLUMN_WIDTH }}
         >
           {log.costTotal !== undefined && log.costTotal !== null ? (
-            <CostToolTip
-              source={log.costSource}
-              costMetadata={log.costMetadata}
-              costBreakdown={costBreakdown}
-            >
-              <span className="block truncate" style={{ fontWeight: '500', cursor: 'help' }}>
-                {log.costTotal === 0
-                  ? '-'
-                  : formatCostIn(log.costTotal, { currency, rate, symbol, decimals: 6 })}
-              </span>
-            </CostToolTip>
+            <div className={log.costTotal === 0 ? 'text-center' : undefined}>
+              <CostToolTip
+                source={log.costSource}
+                costMetadata={log.costMetadata}
+                costBreakdown={costBreakdown}
+              >
+                <span className="block truncate" style={{ fontWeight: '500', cursor: 'help' }}>
+                  {log.costTotal === 0
+                    ? '-'
+                    : formatCostIn(log.costTotal, { currency, rate, symbol, decimals: 6 })}
+                </span>
+              </CostToolTip>
+            </div>
           ) : (
             <span
               style={{
                 color: 'var(--color-text-secondary)',
                 fontSize: '1.2em',
                 display: 'block',
-                textAlign: 'center',
               }}
             >
               -
@@ -1831,77 +1832,90 @@ export const Logs = () => {
 
         <form
           onSubmit={handleSearch}
-          className="hidden items-end gap-2 lg:flex lg:flex-row lg:flex-wrap"
+          className="hidden w-full min-w-0 lg:grid lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:items-center lg:gap-2"
         >
-          {!isLimited && (
-            <div className="sm:w-56">
+          <div className={clsx('grid min-w-0 gap-2', isLimited ? 'grid-cols-2' : 'grid-cols-3')}>
+            {!isLimited && (
+              <div className="min-w-0">
+                <SearchInput
+                  placeholder="Key…"
+                  value={filters.apiKey}
+                  onChange={(v) => setFilters({ ...filters, apiKey: v })}
+                  className="!h-8 text-xs"
+                />
+              </div>
+            )}
+            <div className="min-w-0">
               <SearchInput
-                placeholder="Key…"
-                value={filters.apiKey}
-                onChange={(v) => setFilters({ ...filters, apiKey: v })}
+                placeholder="Model…"
+                value={filters.incomingModelAlias}
+                onChange={(v) => setFilters({ ...filters, incomingModelAlias: v })}
+                className="!h-8 text-xs"
               />
             </div>
-          )}
-          <div className="sm:w-56">
-            <SearchInput
-              placeholder="Model…"
-              value={filters.incomingModelAlias}
-              onChange={(v) => setFilters({ ...filters, incomingModelAlias: v })}
-            />
+            <div className="min-w-0">
+              <SearchInput
+                placeholder="Provider…"
+                value={filters.provider}
+                onChange={(v) => setFilters({ ...filters, provider: v })}
+                className="!h-8 text-xs"
+              />
+            </div>
           </div>
-          <div className="sm:w-44">
-            <SearchInput
-              placeholder="Provider…"
-              value={filters.provider}
-              onChange={(v) => setFilters({ ...filters, provider: v })}
-            />
-          </div>
-          <div className="hidden sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none sm:gap-2">
-              <PlayCircle size={18} className="shrink-0 text-slate-400 sm:h-6 sm:w-6" />
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <PlayCircle size={14} className="shrink-0 text-slate-400" />
               <DateTimePicker
                 value={filters.startDate}
                 onChange={(v) => setFilters((prev) => ({ ...prev, startDate: v }))}
                 placeholder="Start date"
-                className="min-w-0 flex-1 sm:flex-none"
+                className="min-w-0 flex-1 [&>button]:!h-8 [&>button]:!w-full [&>button]:!min-w-0 [&>button]:!gap-1.5 [&>button]:!px-2 [&>button]:!py-0 [&>button]:!text-xs"
               />
             </div>
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none sm:gap-2">
-              <Circle size={18} className="shrink-0 text-slate-400 sm:h-6 sm:w-6" />
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <Circle size={14} className="shrink-0 text-slate-400" />
               <DateTimePicker
                 value={filters.endDate}
                 onChange={(v) => setFilters((prev) => ({ ...prev, endDate: v }))}
                 placeholder="End date"
-                className="min-w-0 flex-1 sm:flex-none"
+                className="min-w-0 flex-1 [&>button]:!h-8 [&>button]:!w-full [&>button]:!min-w-0 [&>button]:!gap-1.5 [&>button]:!px-2 [&>button]:!py-0 [&>button]:!text-xs"
               />
             </div>
             {(filters.startDate || filters.endDate) && (
               <button
                 type="button"
                 onClick={() => setFilters({ ...filters, startDate: '', endDate: '' })}
-                className="rounded-md border-0 bg-transparent text-text-muted transition-colors duration-fast hover:bg-bg-hover hover:text-text"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border-0 bg-transparent text-text-muted transition-colors duration-fast hover:bg-bg-hover hover:text-text"
                 title="Clear date filters"
+                aria-label="Clear date filters"
               >
                 <X size={14} />
               </button>
             )}
           </div>
-          <Button type="submit" variant="primary" size="sm">
-            Search
-          </Button>
-          <div className="sm:w-40">
-            <Select
-              label="Per page"
-              value={String(limit)}
-              onChange={handleLimitChange}
-              className="py-1.5 sm:py-2"
-              options={[
-                { value: '20', label: '20' },
-                { value: '50', label: '50' },
-                { value: '100', label: '100' },
-                { value: '200', label: '200' },
-              ]}
-            />
+          <div className="flex shrink-0 items-center gap-2">
+            <Button type="submit" variant="primary" size="sm" className="!h-8">
+              Search
+            </Button>
+            <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+              <label htmlFor="logs-per-page" className="text-xs font-medium text-text-secondary">
+                Per page
+              </label>
+              <div className="w-[4.5rem]">
+                <Select
+                  id="logs-per-page"
+                  value={String(limit)}
+                  onChange={handleLimitChange}
+                  className="!h-8 !py-0 !pl-2 !pr-7 text-xs"
+                  options={[
+                    { value: '20', label: '20' },
+                    { value: '50', label: '50' },
+                    { value: '100', label: '100' },
+                    { value: '200', label: '200' },
+                  ]}
+                />
+              </div>
+            </div>
           </div>
         </form>
       </PageHeader>
