@@ -1,0 +1,89 @@
+get:
+  tags:
+    - Management — Config
+  summary: Get low memory mode config (admin only)
+  description: |
+    Returns the low memory mode configuration.
+
+    ## What's included
+
+    - `enabled` — Whether low memory mode is active (default: `false`)
+
+    ## Use case
+
+    When enabled, Plexus skips loading the model metadata catalogs
+    (OpenRouter, models.dev, Catwalk) at startup and drops them from
+    memory when toggled at runtime. This reduces RAM usage at the cost
+    of empty model search and pricing hints until a manual refresh
+    ("Refresh Metadata" in the UI).
+
+    **Admin only** — limited principals receive 403.
+  security:
+    - AdminKey: []
+  responses:
+    '200':
+      description: Low memory mode config.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              enabled:
+                type: boolean
+                description: Whether low memory mode is enabled
+    '401':
+      description: Authentication required or invalid credentials.
+  operationId: getV0ManagementConfigLowMemory
+patch:
+  tags:
+    - Management — Config
+  summary: Update low memory mode config (admin only)
+  description: |
+    Partially updates the low memory mode configuration.
+
+    ## Validation rules
+
+    - `enabled` — Must be a boolean
+
+    ## Behavior
+
+    - Enabling: drops the model metadata catalog maps and raw fetch cache
+      from memory, stops the metadata auto-refresh timer, and forces a
+      full garbage collection. Model search and pricing hints return
+      empty until a manual refresh.
+    - Disabling: triggers an immediate metadata reload (fire-and-forget),
+      repopulating the catalogs without requiring a restart.
+
+    **Admin only** — limited principals receive 403.
+  security:
+    - AdminKey: []
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              description: Enable or disable low memory mode
+        examples:
+          enable_low_memory:
+            summary: Enable low memory mode
+            value:
+              enabled: true
+  responses:
+    '200':
+      description: Updated config.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              enabled:
+                type: boolean
+    '400':
+      description: Invalid request body or validation failed.
+    '401':
+      description: Authentication required or invalid credentials.
+  operationId: patchV0ManagementConfigLowMemory

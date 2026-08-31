@@ -2893,6 +2893,24 @@ export const api = {
     return res.json();
   },
 
+  /** Fetch whether low memory mode is on. */
+  getLowMemoryMode: async (): Promise<{ enabled: boolean }> => {
+    const res = await fetchWithAuth(`${API_BASE}/v0/management/config/low-memory`);
+    if (!res.ok) throw new Error('Failed to fetch low memory mode setting');
+    return res.json();
+  },
+
+  /** Update the low memory mode toggle. */
+  setLowMemoryMode: async (updates: { enabled: boolean }): Promise<{ enabled: boolean }> => {
+    const res = await fetchWithAuth(`${API_BASE}/v0/management/config/low-memory`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error('Failed to update low memory mode setting');
+    return res.json();
+  },
+
   getPiProviders: async (): Promise<string[]> => {
     const res = await fetchWithAuth(`${API_BASE}/v0/management/pi/providers`);
     if (!res.ok) throw new Error('Failed to fetch pi providers');

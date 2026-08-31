@@ -225,18 +225,26 @@ try {
   // `modelMetadataAutoRefresh.enabled` setting (default off). Operators can
   // still trigger an immediate reload via the "Refresh Metadata" button in
   // the UI or by flipping the toggle on.
+  // `lowMemoryMode.enabled` (default off) skips loading the metadata catalogs
+  // entirely at boot — search/pricing hints stay empty until a manual refresh.
   const modelMetadataManager = ModelMetadataManager.getInstance();
-  const autoRefreshEnabled = await configService
-    .getRepository()
-    .getModelMetadataAutoRefreshEnabled();
-  if (autoRefreshEnabled) {
-    modelMetadataManager.startAutoRefresh(60);
+  const [autoRefreshEnabled, lowMemoryMode] = await Promise.all([
+    configService.getRepository().getModelMetadataAutoRefreshEnabled(),
+    configService.getRepository().getLowMemoryModeEnabled(),
+  ]);
+  if (lowMemoryMode) {
+    modelMetadataManager.unload();
+    logger.info('Low memory mode enabled — skipping model metadata load at boot');
   } else {
-    logger.info('Model metadata auto-refresh is disabled via setting; skipping periodic schedule');
+    if (autoRefreshEnabled) {
+      modelMetadataManager.startAutoRefresh(60);
+    } else {
+      logger.info('Model metadata auto-refresh is disabled via setting; skipping periodic schedule');
+    }
+    modelMetadataManager.refreshAll(undefined, 'startup').catch((e) => {
+      logger.error('Failed to load model metadata', e);
+    });
   }
-  modelMetadataManager.refreshAll(undefined, 'startup').catch((e) => {
-    logger.error('Failed to load model metadata', e);
-  });
   CodexVersionService.getInstance()
     .fetchVersion()
     .catch((e) => {

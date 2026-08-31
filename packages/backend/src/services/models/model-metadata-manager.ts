@@ -470,6 +470,21 @@ export class ModelMetadataManager {
   }
 
   /**
+   * Drop all cached metadata (low memory mode). Clears the three catalog
+   * maps, the raw fetch cache, and stops the auto-refresh timer first so
+   * a pending scheduled refresh can't repopulate the maps. Search and
+   * pricing lookups return empty until the next explicit load/refresh.
+   */
+  public unload(): void {
+    this.stopAutoRefresh();
+    this.openrouterMap.clear();
+    this.modelsDevMap.clear();
+    this.catwalkMap.clear();
+    this.initializedSources.clear();
+    this.fetchCache.clear();
+  }
+
+  /**
    * Apply the `modelMetadataAutoRefresh.enabled` setting. When on, schedules
    * the periodic refresh (60 minutes by default). When off, clears any
    * existing schedule. Idempotent — safe to call on every config change.

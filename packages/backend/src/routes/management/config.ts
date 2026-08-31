@@ -916,6 +916,56 @@ export async function registerConfigRoutes(
     }
   });
 
+  // ─── Low Memory Mode ───────────────────────────────────────────────
+
+  fastify.get('/v0/management/config/low-memory', async (_request, reply) => {
+    try {
+      const enabled = await configService.getRepository().getLowMemoryModeEnabled();
+      return reply.send({ enabled });
+    } catch (e: any) {
+      logger.error('Failed to read low-memory-mode config', e);
+      return reply.code(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  fastify.patch('/v0/management/config/low-memory', async (request, reply) => {
+    const body = request.body as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return reply.code(400).send({ error: 'Object body is required' });
+    }
+
+    try {
+      let enabled: boolean | undefined;
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== 'boolean') {
+          return reply.code(400).send({ error: 'enabled must be a boolean' });
+        }
+        enabled = body.enabled;
+        await configService.setSetting('lowMemoryMode.enabled', body.enabled);
+
+        const modelMetadataManager = ModelMetadataManager.getInstance();
+        if (body.enabled) {
+          // Drop the catalog maps + raw fetch cache, then force a full GC so
+          // the freed heap is actually returned to the OS.
+          modelMetadataManager.unload();
+          (globalThis as { Bun?: { gc?: (force: boolean) => void } }).Bun?.gc?.(true);
+        } else {
+          // Repopulate the catalogs without requiring a restart.
+          modelMetadataManager.refreshAll(undefined, 'manual').catch((e) => {
+            logger.error('Failed to reload model metadata after low-memory-mode change', e);
+          });
+        }
+      }
+
+      const updated = await configService.getRepository().getLowMemoryModeEnabled();
+      logger.debug(`Low memory mode config updated via API (enabled=${updated})`);
+      return reply.send({ enabled: updated });
+    } catch (e: any) {
+      logger.error('Failed to patch low-memory-mode config', e);
+      return reply.code(500).send({ error: 'Internal server error' });
+    }
+  });
+
   // ─── Timeout Config ───────────────────────────────────────────────
 
   fastify.get('/v0/management/config/timeout', async (_request, reply) => {

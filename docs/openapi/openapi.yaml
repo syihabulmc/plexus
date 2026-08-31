@@ -427,6 +427,8 @@ paths:
     $ref: paths/v0_management_config_failover.yaml
   /v0/management/config/capture-trace-on-error:
     $ref: paths/v0_management_config_capture-trace-on-error.yaml
+  /v0/management/config/low-memory:
+    $ref: paths/v0_management_config_low-memory.yaml
   /v0/management/config/trusted-proxies:
     $ref: paths/v0_management_config_trusted-proxies.yaml
   /v0/management/config/compaction:

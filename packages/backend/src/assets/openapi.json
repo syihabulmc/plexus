@@ -3200,6 +3200,102 @@
         "operationId": "patchV0ManagementConfigCaptureTraceOnError"
       }
     },
+    "/v0/management/config/low-memory": {
+      "get": {
+        "tags": [
+          "Management — Config"
+        ],
+        "summary": "Get low memory mode config (admin only)",
+        "description": "Returns the low memory mode configuration.\n\n## What's included\n\n- `enabled` — Whether low memory mode is active (default: `false`)\n\n## Use case\n\nWhen enabled, Plexus skips loading the model metadata catalogs\n(OpenRouter, models.dev, Catwalk) at startup and drops them from\nmemory when toggled at runtime. This reduces RAM usage at the cost\nof empty model search and pricing hints until a manual refresh\n(\"Refresh Metadata\" in the UI).\n\n**Admin only** — limited principals receive 403.\n",
+        "security": [
+          {
+            "AdminKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Low memory mode config.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Whether low memory mode is enabled"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid credentials."
+          }
+        },
+        "operationId": "getV0ManagementConfigLowMemory"
+      },
+      "patch": {
+        "tags": [
+          "Management — Config"
+        ],
+        "summary": "Update low memory mode config (admin only)",
+        "description": "Partially updates the low memory mode configuration.\n\n## Validation rules\n\n- `enabled` — Must be a boolean\n\n## Behavior\n\n- Enabling: drops the model metadata catalog maps and raw fetch cache\n  from memory, stops the metadata auto-refresh timer, and forces a\n  full garbage collection. Model search and pricing hints return\n  empty until a manual refresh.\n- Disabling: triggers an immediate metadata reload (fire-and-forget),\n  repopulating the catalogs without requiring a restart.\n\n**Admin only** — limited principals receive 403.\n",
+        "security": [
+          {
+            "AdminKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Enable or disable low memory mode"
+                  }
+                }
+              },
+              "examples": {
+                "enable_low_memory": {
+                  "summary": "Enable low memory mode",
+                  "value": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated config.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or validation failed."
+          },
+          "401": {
+            "description": "Authentication required or invalid credentials."
+          }
+        },
+        "operationId": "patchV0ManagementConfigLowMemory"
+      }
+    },
     "/v0/management/config/trusted-proxies": {
       "get": {
         "tags": [

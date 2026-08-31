@@ -623,6 +623,75 @@ describe('ModelMetadataManager – singleton', () => {
   });
 });
 
+// ─── Low Memory Mode (unload) ────────────────────────────────────
+
+describe('ModelMetadataManager – unload (low memory mode)', () => {
+  test('unload clears all loaded sources', async () => {
+    ModelMetadataManager.resetForTesting();
+    const mgr = ModelMetadataManager.getInstance();
+    await mgr.loadAll({
+      openrouter: openrouterFixture,
+      modelsDev: '/dev/null-nonexistent',
+      catwalk: '/dev/null-nonexistent',
+    });
+    expect(mgr.isInitialized('openrouter')).toBe(true);
+
+    mgr.unload();
+
+    expect(mgr.isInitialized('openrouter')).toBe(false);
+    expect(mgr.isAnyInitialized()).toBe(false);
+    expect(mgr.getMetadata('openrouter', 'anthropic/claude-3.5-sonnet')).toBeUndefined();
+    expect(mgr.getAllIds('openrouter')).toEqual([]);
+    expect(mgr.search('openrouter', 'claude')).toEqual([]);
+  });
+
+  test('reload after unload repopulates metadata', async () => {
+    ModelMetadataManager.resetForTesting();
+    const mgr = ModelMetadataManager.getInstance();
+    const sources = {
+      openrouter: openrouterFixture,
+      modelsDev: '/dev/null-nonexistent',
+      catwalk: '/dev/null-nonexistent',
+    } as const;
+
+    await mgr.loadAll(sources);
+    mgr.unload();
+    await mgr.loadAll(sources);
+
+    expect(mgr.isInitialized('openrouter')).toBe(true);
+    expect(mgr.getMetadata('openrouter', 'anthropic/claude-3.5-sonnet')).toBeDefined();
+  });
+
+  test('unload stops the auto-refresh timer so maps stay empty', async () => {
+    vi.useFakeTimers();
+    ModelMetadataManager.resetForTesting();
+    const mgr = ModelMetadataManager.getInstance();
+
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await mgr.refreshAll({
+      openrouter: 'https://example.com/openrouter.json',
+      modelsDev: 'https://example.com/models-dev.json',
+      catwalk: 'https://example.com/catwalk.json',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    mgr.startAutoRefresh(60);
+    mgr.unload();
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+
+    // Timer was stopped by unload — no refetch, maps stay empty.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(mgr.isAnyInitialized()).toBe(false);
+  });
+});
+
 // ─── mergeOverrides ─────────────────────────────────────────────
 
 describe('mergeOverrides', () => {

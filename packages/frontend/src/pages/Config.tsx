@@ -16,6 +16,7 @@ import {
   Trash2,
   LockKeyhole,
   Info,
+  Cpu,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import type { CompactionSettings, McpOAuthSettings } from '../lib/api';
@@ -97,6 +98,10 @@ interface ModelMetadataAutoRefreshConfig {
   enabled: boolean;
 }
 
+interface LowMemoryModeConfig {
+  enabled: boolean;
+}
+
 interface TimeoutConfig {
   defaultSeconds: number;
 }
@@ -132,6 +137,10 @@ const DEFAULT_BACKGROUND_QUOTA_CHECK: BackgroundQuotaCheckConfig = {
 };
 
 const DEFAULT_MODEL_METADATA_AUTO_REFRESH: ModelMetadataAutoRefreshConfig = {
+  enabled: false,
+};
+
+const DEFAULT_LOW_MEMORY_MODE: LowMemoryModeConfig = {
   enabled: false,
 };
 
@@ -367,6 +376,13 @@ export const Config = () => {
   const [metadataAutoRefreshLoaded, setMetadataAutoRefreshLoaded] = useState(false);
   const [metadataAutoRefreshSaving, setMetadataAutoRefreshSaving] = useState(false);
 
+  // Low memory mode toggle (default off)
+  const [lowMemoryMode, setLowMemoryMode] = useState<LowMemoryModeConfig>(
+    DEFAULT_LOW_MEMORY_MODE
+  );
+  const [lowMemoryModeLoaded, setLowMemoryModeLoaded] = useState(false);
+  const [lowMemoryModeSaving, setLowMemoryModeSaving] = useState(false);
+
   const validateStalenessInput = (
     raw: string
   ): { valid: boolean; value?: number; error?: string } => {
@@ -545,6 +561,33 @@ export const Config = () => {
       toast.error((e as Error).message, 'Failed to update model metadata auto-refresh');
     } finally {
       setMetadataAutoRefreshSaving(false);
+    }
+  };
+
+  const loadLowMemoryMode = useCallback(async () => {
+    try {
+      const cfg = await api.getLowMemoryMode();
+      setLowMemoryMode(cfg);
+      setLowMemoryModeLoaded(true);
+    } catch (e) {
+      console.error('Failed to load low memory mode setting:', e);
+      toast.error('Failed to load low memory mode setting');
+    }
+  }, [toast]);
+
+  const handleToggleLowMemoryMode = async (checked: boolean) => {
+    const previous = lowMemoryMode.enabled;
+    setLowMemoryMode({ enabled: checked });
+    setLowMemoryModeSaving(true);
+    try {
+      const { enabled } = await api.setLowMemoryMode({ enabled: checked });
+      setLowMemoryMode({ enabled });
+      toast.success(`Low memory mode ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      setLowMemoryMode({ enabled: previous });
+      toast.error((e as Error).message, 'Failed to update low memory mode');
+    } finally {
+      setLowMemoryModeSaving(false);
     }
   };
 
@@ -865,6 +908,7 @@ export const Config = () => {
     loadBackgroundExploration();
     loadBackgroundQuotaCheck();
     loadModelMetadataAutoRefresh();
+    loadLowMemoryMode();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2166,6 +2210,29 @@ export const Config = () => {
                 onChange={handleToggleMetadataAutoRefresh}
                 disabled={!metadataAutoRefreshLoaded || metadataAutoRefreshSaving}
                 aria-label="Toggle 60-minute model metadata auto-refresh on/off"
+              />
+            </div>
+
+            <div className="flex items-center justify-between mt-4">
+              <div className="flex items-center gap-2">
+                <Cpu size={16} className="text-primary" />
+                <div>
+                  <p className="font-body text-[12px] font-medium text-text">
+                    Low memory mode
+                  </p>
+                  <p className="font-body text-[11px] text-text-muted">
+                    Off by default. When on, Plexus skips loading the model metadata catalogs at
+                    startup and drops them from memory — reduces RAM usage at the cost of empty
+                    model search and pricing hints until a manual refresh. When turned off, the
+                    catalogs are reloaded immediately.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={lowMemoryMode.enabled}
+                onChange={handleToggleLowMemoryMode}
+                disabled={!lowMemoryModeLoaded || lowMemoryModeSaving}
+                aria-label="Toggle low memory mode on/off"
               />
             </div>
           </Disclosure>

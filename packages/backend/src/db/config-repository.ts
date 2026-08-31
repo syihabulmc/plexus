@@ -2019,6 +2019,10 @@ export class ConfigRepository {
     return this.getSetting<boolean>('modelMetadataAutoRefresh.enabled', false);
   }
 
+  async getLowMemoryModeEnabled(): Promise<boolean> {
+    return this.getSetting<boolean>('lowMemoryMode.enabled', false);
+  }
+
   async getMcpOAuthConfig(): Promise<McpOAuthConfig> {
     const stored = await this.getSetting<Partial<McpOAuthConfig>>('mcpOAuth', {});
     const enabled = stored?.enabled === true;
