@@ -62,7 +62,7 @@ import { initializeDatabase } from './db/client';
 import { runMigrations } from './db/migrate';
 import { runEncryptionMigration } from './db/encrypt-migration';
 import { runMcpKeyMigration } from './db/mcp-key-migration';
-import { isEncryptionEnabled } from './utils/encryption';
+import { assertEncryptionOrWarn } from './utils/encryption';
 import { mcpProcessManager } from './services/mcp-local/mcp-process-manager';
 
 registerBunOAuthFlows();
@@ -171,11 +171,7 @@ try {
   process.exit(1);
 }
 
-if (!isEncryptionEnabled()) {
-  logger.warn(
-    'ENCRYPTION_KEY not set — sensitive data will be stored in plaintext. Set ENCRYPTION_KEY for encryption at rest.'
-  );
-}
+assertEncryptionOrWarn();
 
 // --- Model Catalog Initialization ---
 // Restore the persisted pi.dev catalog overlay (offline, fast) so config

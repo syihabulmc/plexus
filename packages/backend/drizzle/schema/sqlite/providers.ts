@@ -64,7 +64,7 @@ export const providerKeys = sqliteTable(
     id: text('id').primaryKey(),
     providerId: integer('provider_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => providers.id, { onDelete: 'restrict' }),
     label: text('label').notNull().default(''),
     apiKey: text('api_key').notNull(),
     managementKey: text('management_key'),

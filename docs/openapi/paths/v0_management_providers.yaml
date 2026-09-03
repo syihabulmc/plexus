@@ -8,7 +8,7 @@ get:
     Each entry contains the full provider configuration including:
     - `type` — Provider type (openai, anthropic, gemini, etc.)
     - `base_url` — Override URL for the provider
-    - `api_key` — API key (encrypted at rest)
+    - `api_key` — API key value (decrypted from the database; encryption-at-rest is enabled when ENCRYPTION_KEY is set)
     - `quota` — Optional quota checker configuration
     - GPU profile fields for energy estimation
 

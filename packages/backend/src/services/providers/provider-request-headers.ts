@@ -29,6 +29,23 @@ export async function selectProviderKey(route: RouteResult): Promise<ApiKeyEntry
   if (apiKeys.length === 0) return undefined;
 
   const cm = CooldownManager.getInstance();
+
+  // Honor a pre-stamped sticky keyId (e.g. from Router sticky_session
+  // hoisting) before the priority sort. Falls through to the priority
+  // loop if the sticky key is missing, disabled, blank, or on cooldown.
+  if (route.selectedKeyId) {
+    const sticky = apiKeys.find((k) => k.id === route.selectedKeyId);
+    if (
+      sticky &&
+      sticky.enabled !== false &&
+      sticky.api_key?.trim() &&
+      (await cm.isProviderHealthy(route.provider, route.model, sticky.id)) &&
+      (await cm.isProviderHealthy(route.provider, '', sticky.id))
+    ) {
+      return sticky;
+    }
+  }
+
   // Defensive sort — config-service also sorts by priority, but the helper
   // re-sorts so it works regardless of caller. Stable sort: equal
   // priorities keep array order.

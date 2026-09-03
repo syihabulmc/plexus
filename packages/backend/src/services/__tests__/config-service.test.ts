@@ -50,6 +50,9 @@ function createMockRepo() {
       })
     ),
     getAllSettings: vi.fn(() => Promise.resolve({})),
+    backfillEmptyKeyLabels: vi.fn(() => Promise.resolve(0)),
+    getAllProviderKeys: vi.fn(() => Promise.resolve([])),
+    getProviderIdToSlugMap: vi.fn(() => Promise.resolve(new Map())),
   };
 }
 

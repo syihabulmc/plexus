@@ -16,6 +16,7 @@ import { executeStandardAttempt } from './standard-attempt-request';
 import { isNativeOAuthRoute } from './request-payload-builder';
 import { isClaudeMaskingApiKeyRoute } from '../oauth/oauth-dispatcher';
 import { genericOAuthApiType, nativeOAuthApiType } from '../oauth/oauth-native-request';
+import { selectProviderKey } from '../providers/provider-request-headers';
 import type { RetryAttemptRecord } from './dispatcher-types';
 import type { ResolveTimeoutMs } from './upstream-execution';
 
@@ -121,6 +122,24 @@ export class RequestManager {
       // Context validation must happen before a concurrency slot is acquired.
       if (aliasConfig?.enforce_limits && route.canonicalModel) {
         enforceContextLimit(currentRequest, aliasConfig, route.canonicalModel);
+      }
+
+      // Pre-select the API key BEFORE admission so the concurrency slot is
+      // attributed to the right per-key bucket. Without this, three candidate
+      // clones (one per key) with maxConcurrency=1 would all collide on the
+      // shared provider slot. `selectProviderKey` honors a sticky
+      // `route.selectedKeyId` (set by Router sticky_session hoisting), so
+      // re-selecting here is a no-op for the sticky case. `setupHeaders`
+      // (called later via the standard attempt) sees the stamp and skips
+      // re-selection itself.
+      const apiKeysForRoute = route.config.api_keys as
+        | { id: string; enabled?: boolean; api_key?: string }[]
+        | undefined;
+      if (apiKeysForRoute && apiKeysForRoute.length > 0 && !route.selectedKeyId) {
+        const preSelected = await selectProviderKey(route);
+        if (preSelected) {
+          route.selectedKeyId = preSelected.id;
+        }
       }
 
       const admission = await admitProvider(route);

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { logger } from './logger';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
@@ -52,6 +53,72 @@ export function resetEncryptionKeyCache(): void {
  */
 export function isEncryptionEnabled(): boolean {
   return getEncryptionKey() !== null;
+}
+
+const ENCRYPTION_DISABLED_WARNING =
+  'ENCRYPTION_KEY is not set — secrets will be stored as plaintext. ' +
+  'This is a security risk. Set ENCRYPTION_KEY before storing any provider keys, ' +
+  'MCP keys, OAuth credentials, or API keys.';
+
+/**
+ * Log a loud warning (or error) when ENCRYPTION_KEY is not set.
+ *
+ * - If encryption is disabled, always logs `error` with a clear message.
+ * - If encryption is disabled AND any of `providerKeys`, `apiKeys`, `mcpKeys`,
+ *   `oauthCredentials`, or `providers` (apiKey column) has at least one row,
+ *   additionally logs a per-table `error` because secrets are actively being
+ *   written in cleartext.
+ *
+ * Never throws. Safe to call at startup before/after the database is ready —
+ * the table check is best-effort and any failure is swallowed (the env-var
+ * warning has already been emitted).
+ */
+export function assertEncryptionOrWarn(): void {
+  if (isEncryptionEnabled()) return;
+
+  logger.error(ENCRYPTION_DISABLED_WARNING);
+
+  // Best-effort: if the database is reachable at startup, escalate the warning
+  // to an error when there is plaintext secret data already on disk. Lazy
+  // import avoids any potential circular-dependency with the db layer.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getDatabase } = require('../db/client') as typeof import('../db/client');
+    const db = getDatabase();
+    if (!db) return;
+
+    // Each check is independent — a missing table on one dialect should not
+    // prevent the others from being evaluated.
+    const secretTableChecks: Array<{ table: string; column?: string }> = [
+      { table: 'providerKeys' },
+      { table: 'apiKeys' },
+      { table: 'mcpKeys' },
+      { table: 'oauthCredentials' },
+      { table: 'providers', column: 'apiKey' },
+    ];
+
+    for (const { table, column } of secretTableChecks) {
+      try {
+        // Use raw SQL because the table objects are typed against the runtime
+        // dialect; a quick COUNT(*) avoids dragging schema types into the utils
+        // layer. SQLite + Postgres both accept this syntax.
+        const result = db
+          .all(`SELECT COUNT(*) AS count FROM ${table}${column ? ` WHERE ${column} IS NOT NULL` : ''}`)
+          ?.at(0) as { count?: number | string } | undefined;
+        const count = Number(result?.count ?? 0);
+        if (count > 0) {
+          logger.error(
+            `ENCRYPTION_KEY is not set but table "${table}" already contains ${count} secret-bearing row(s). ` +
+              'These are stored as plaintext. Set ENCRYPTION_KEY and rekey the affected records.'
+          );
+        }
+      } catch {
+        // Table may not exist in the current dialect; ignore.
+      }
+    }
+  } catch {
+    // Database not initialized yet, or circular dep — the env-var warning above is enough.
+  }
 }
 
 /**

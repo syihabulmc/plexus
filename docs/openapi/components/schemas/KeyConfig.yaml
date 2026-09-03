@@ -10,8 +10,9 @@ properties:
     type: string
     example: sk-0123...
     description: >
-      The API key secret. Stored encrypted at rest. Format is typically
-      `sk-...` but any string is accepted.
+      The API key secret. Decrypted from the database on read; stored
+      encrypted at rest. Format is typically `sk-...` but any string is
+      accepted.
   comment:
     type: string
     description: >

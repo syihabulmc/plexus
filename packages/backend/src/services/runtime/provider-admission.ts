@@ -54,7 +54,11 @@ export async function admitProvider(route: RouteResult): Promise<ProviderAdmissi
     }
   }
 
-  const acquired = ConcurrencyTracker.getInstance().acquire(route.provider, route.model);
+  const acquired = ConcurrencyTracker.getInstance().acquire(
+    route.provider,
+    route.model,
+    route.selectedKeyId
+  );
   if (!acquired) {
     return {
       admitted: false,
@@ -68,7 +72,11 @@ export async function admitProvider(route: RouteResult): Promise<ProviderAdmissi
     release: () => {
       if (!released) {
         released = true;
-        ConcurrencyTracker.getInstance().release(route.provider, route.model);
+        ConcurrencyTracker.getInstance().release(
+          route.provider,
+          route.model,
+          route.selectedKeyId
+        );
       }
     },
   };

@@ -159,7 +159,11 @@ export class MediaDispatcher {
       }
 
       // Acquire concurrency slot before upstream request
-      const acquired = ConcurrencyTracker.getInstance().acquire(route.provider, route.model);
+      const acquired = ConcurrencyTracker.getInstance().acquire(
+        route.provider,
+        route.model,
+        route.selectedKeyId
+      );
       if (!acquired) {
         logger.warn(`Skipping ${route.provider}/${route.model} - concurrency limit exceeded`);
         lastError = new Error(
@@ -180,7 +184,11 @@ export class MediaDispatcher {
       const doRelease = () => {
         if (!released) {
           released = true;
-          ConcurrencyTracker.getInstance().release(route.provider, route.model);
+          ConcurrencyTracker.getInstance().release(
+            route.provider,
+            route.model,
+            route.selectedKeyId
+          );
         }
       };
 
@@ -424,7 +432,11 @@ export class MediaDispatcher {
       }
 
       // Acquire concurrency slot before upstream request
-      const acquired = ConcurrencyTracker.getInstance().acquire(route.provider, route.model);
+      const acquired = ConcurrencyTracker.getInstance().acquire(
+        route.provider,
+        route.model,
+        route.selectedKeyId
+      );
       if (!acquired) {
         logger.warn(`Skipping ${route.provider}/${route.model} - concurrency limit exceeded`);
         lastError = new Error(
@@ -445,7 +457,11 @@ export class MediaDispatcher {
       const doRelease = () => {
         if (!released) {
           released = true;
-          ConcurrencyTracker.getInstance().release(route.provider, route.model);
+          ConcurrencyTracker.getInstance().release(
+            route.provider,
+            route.model,
+            route.selectedKeyId
+          );
         }
       };
 
@@ -677,7 +693,11 @@ export class MediaDispatcher {
       }
 
       // Acquire concurrency slot before upstream request
-      const acquired = ConcurrencyTracker.getInstance().acquire(route.provider, route.model);
+      const acquired = ConcurrencyTracker.getInstance().acquire(
+        route.provider,
+        route.model,
+        route.selectedKeyId
+      );
       if (!acquired) {
         logger.warn(`Skipping ${route.provider}/${route.model} - concurrency limit exceeded`);
         lastError = new Error(
@@ -698,7 +718,11 @@ export class MediaDispatcher {
       const doRelease = () => {
         if (!released) {
           released = true;
-          ConcurrencyTracker.getInstance().release(route.provider, route.model);
+          ConcurrencyTracker.getInstance().release(
+            route.provider,
+            route.model,
+            route.selectedKeyId
+          );
         }
       };
 
@@ -991,7 +1015,11 @@ export class MediaDispatcher {
       }
 
       // Acquire concurrency slot before upstream request
-      const acquired = ConcurrencyTracker.getInstance().acquire(route.provider, route.model);
+      const acquired = ConcurrencyTracker.getInstance().acquire(
+        route.provider,
+        route.model,
+        route.selectedKeyId
+      );
       if (!acquired) {
         logger.warn(`Skipping ${route.provider}/${route.model} - concurrency limit exceeded`);
         lastError = new Error(
@@ -1012,7 +1040,11 @@ export class MediaDispatcher {
       const doRelease = () => {
         if (!released) {
           released = true;
-          ConcurrencyTracker.getInstance().release(route.provider, route.model);
+          ConcurrencyTracker.getInstance().release(
+            route.provider,
+            route.model,
+            route.selectedKeyId
+          );
         }
       };
 
@@ -1248,7 +1280,11 @@ export class MediaDispatcher {
       }
 
       // Acquire concurrency slot before upstream request
-      const acquired = ConcurrencyTracker.getInstance().acquire(route.provider, route.model);
+      const acquired = ConcurrencyTracker.getInstance().acquire(
+        route.provider,
+        route.model,
+        route.selectedKeyId
+      );
       if (!acquired) {
         logger.warn(`Skipping ${route.provider}/${route.model} - concurrency limit exceeded`);
         lastError = new Error(
@@ -1269,7 +1305,11 @@ export class MediaDispatcher {
       const doRelease = () => {
         if (!released) {
           released = true;
-          ConcurrencyTracker.getInstance().release(route.provider, route.model);
+          ConcurrencyTracker.getInstance().release(
+            route.provider,
+            route.model,
+            route.selectedKeyId
+          );
         }
       };
 

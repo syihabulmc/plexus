@@ -7,9 +7,9 @@ get:
 
     ## Secret handling
 
-    The `secret` field is stored encrypted at rest in the database. It is
-    decrypted for this response. Treat these values carefully — they grant
-    access to your Plexus instance.
+    The `secret` field is decrypted from the database for this response
+    (encryption-at-rest is enabled when ENCRYPTION_KEY is set). Treat these
+    values carefully — they grant access to your Plexus instance.
 
     ## Rotation
 

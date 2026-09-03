@@ -571,16 +571,36 @@ export class ConfigRepository {
   async deleteProvider(slug: string, cascade: boolean = true): Promise<void> {
     const schema = this.schema();
 
+    // Look up the provider id so we can clean up FK-referenced rows (providerKeys
+    // is onDelete: 'restrict' — the DB will reject the provider delete otherwise).
+    const [provider] = await this.db()
+      .select({ id: schema.providers.id })
+      .from(schema.providers)
+      .where(eq(schema.providers.slug, slug));
+    if (!provider) return;
+
     if (cascade) {
       // Explicitly delete model_alias_targets referencing this provider (keyed by slug, not FK)
       await this.db()
         .delete(schema.modelAliasTargets)
         .where(eq(schema.modelAliasTargets.providerSlug, slug));
+      // Explicitly delete provider_keys (FK is onDelete: 'restrict')
+      if (schema.providerKeys) {
+        await this.db()
+          .delete(schema.providerKeys)
+          .where(eq(schema.providerKeys.providerId, provider.id));
+      }
       // FK cascade handles provider_models deletion automatically
-      await this.db().delete(schema.providers).where(eq(schema.providers.slug, slug));
+      await this.db().delete(schema.providers).where(eq(schema.providers.id, provider.id));
     } else {
-      // Delete provider and its provider_models, but retain model_alias_targets
-      await this.db().delete(schema.providers).where(eq(schema.providers.slug, slug));
+      // Explicitly delete provider_keys (FK is onDelete: 'restrict'); keep model_alias_targets
+      if (schema.providerKeys) {
+        await this.db()
+          .delete(schema.providerKeys)
+          .where(eq(schema.providerKeys.providerId, provider.id));
+      }
+      // provider_models deleted via FK cascade
+      await this.db().delete(schema.providers).where(eq(schema.providers.id, provider.id));
     }
   }
 

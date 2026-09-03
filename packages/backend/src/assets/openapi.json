@@ -3707,7 +3707,7 @@
           "Management — Config"
         ],
         "summary": "List all providers (admin only)",
-        "description": "Returns a map of all configured providers keyed by slug.\n\nEach entry contains the full provider configuration including:\n- `type` — Provider type (openai, anthropic, gemini, etc.)\n- `base_url` — Override URL for the provider\n- `api_key` — API key (encrypted at rest)\n- `quota` — Optional quota checker configuration\n- GPU profile fields for energy estimation\n\n**Admin only** — limited principals receive 403.\n",
+        "description": "Returns a map of all configured providers keyed by slug.\n\nEach entry contains the full provider configuration including:\n- `type` — Provider type (openai, anthropic, gemini, etc.)\n- `base_url` — Override URL for the provider\n- `api_key` — API key value (decrypted from the database; encryption-at-rest is enabled when ENCRYPTION_KEY is set)\n- `quota` — Optional quota checker configuration\n- GPU profile fields for energy estimation\n\n**Admin only** — limited principals receive 403.\n",
         "security": [
           {
             "AdminKey": []
@@ -4869,7 +4869,7 @@
           "Management — Config"
         ],
         "summary": "List all API keys (admin only)",
-        "description": "Returns a map of all API keys keyed by name.\n\n## Secret handling\n\nThe `secret` field is stored encrypted at rest in the database. It is\ndecrypted for this response. Treat these values carefully — they grant\naccess to your Plexus instance.\n\n## Rotation\n\nWhen you rotate a key via `POST /v0/management/self/rotate`, a new secret\nis generated and the old one is invalidated. Historical usage data stays\nattached to the key **name**, not the secret value, so you don't lose\nattribution history.\n\n**Admin only** — limited principals receive 403.\n",
+        "description": "Returns a map of all API keys keyed by name.\n\n## Secret handling\n\nThe `secret` field is decrypted from the database for this response\n(encryption-at-rest is enabled when ENCRYPTION_KEY is set). Treat these\nvalues carefully — they grant access to your Plexus instance.\n\n## Rotation\n\nWhen you rotate a key via `POST /v0/management/self/rotate`, a new secret\nis generated and the old one is invalidated. Historical usage data stays\nattached to the key **name**, not the secret value, so you don't lose\nattribution history.\n\n**Admin only** — limited principals receive 403.\n",
         "security": [
           {
             "AdminKey": []
@@ -12687,7 +12687,7 @@
           "secret": {
             "type": "string",
             "example": "sk-0123...",
-            "description": "The API key secret. Stored encrypted at rest. Format is typically `sk-...` but any string is accepted.\n"
+            "description": "The API key secret. Decrypted from the database on read; stored encrypted at rest. Format is typically `sk-...` but any string is accepted.\n"
           },
           "comment": {
             "type": "string",

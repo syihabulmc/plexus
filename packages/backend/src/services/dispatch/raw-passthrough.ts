@@ -61,9 +61,10 @@ export function buildRawUpstreamUrl(baseUrl: string, rawSuffix: string): URL {
   return target;
 }
 
-export function buildRawUpstreamHeaders(
+export function buildRawUpstreamHeadersForKey(
   clientHeaders: IncomingHttpHeaders,
   provider: ProviderConfig,
+  apiKey: string,
   bodyLength: number | null
 ): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -91,7 +92,6 @@ export function buildRawUpstreamHeaders(
     headers[lowerName] = value;
   }
 
-  const apiKey = provider.api_key;
   const auth = provider.raw_passthrough?.auth ?? 'bearer';
   if (!apiKey) throw new Error('Raw passthrough provider has no static API key');
   if (auth === 'x-api-key') headers['x-api-key'] = apiKey;
@@ -106,6 +106,24 @@ export function buildRawUpstreamHeaders(
     headers['content-length'] = String(bodyLength);
   }
   return headers;
+}
+
+export function buildRawUpstreamHeaders(
+  clientHeaders: IncomingHttpHeaders,
+  provider: ProviderConfig,
+  bodyLength: number | null
+): Record<string, string> {
+  // Legacy single api_key path. Routes that use `api_keys` should call
+  // `buildRawUpstreamHeadersForKey` with a key resolved by `selectProviderKey`.
+  if (!provider.api_key) {
+    throw new Error('Raw passthrough provider has no static API key');
+  }
+  return buildRawUpstreamHeadersForKey(
+    clientHeaders,
+    provider,
+    provider.api_key,
+    bodyLength
+  );
 }
 
 export function filterRawResponseHeaders(

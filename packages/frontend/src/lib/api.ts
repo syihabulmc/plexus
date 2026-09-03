@@ -2074,7 +2074,12 @@ export const api = {
     try {
       const q = providerId ? `?provider_id=${encodeURIComponent(providerId)}` : '';
       const res = await fetchWithAuth(`${API_BASE}/v0/management/provider-keys${q}`);
-      if (!res.ok) throw new Error('Failed to fetch provider keys');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail =
+          Array.isArray(err.details) && err.details[0]?.message ? `: ${err.details[0].message}` : '';
+        throw new Error(`${err.error || 'Failed to fetch provider keys'}${detail}`);
+      }
       return await res.json();
     } catch (e) {
       console.error('API Error getProviderKeys', e);
@@ -2095,7 +2100,12 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed to save provider key');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail =
+          Array.isArray(err.details) && err.details[0]?.message ? `: ${err.details[0].message}` : '';
+        throw new Error(`${err.error || 'Failed to save provider key'}${detail}`);
+      }
       return await res.json();
     } catch (e) {
       console.error('API Error saveProviderKey', e);
@@ -2113,7 +2123,12 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider_id: providerId, keys }),
       });
-      if (!res.ok) throw new Error('Failed to bulk-save provider keys');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail =
+          Array.isArray(err.details) && err.details[0]?.message ? `: ${err.details[0].message}` : '';
+        throw new Error(`${err.error || 'Failed to bulk-save provider keys'}${detail}`);
+      }
       return await res.json();
     } catch (e) {
       console.error('API Error saveProviderKeysBulk', e);
@@ -2126,7 +2141,12 @@ export const api = {
       const res = await fetchWithAuth(`${API_BASE}/v0/management/provider-keys/${id}`, {
         method: 'DELETE',
       });
-      if (!res.ok) throw new Error('Failed to delete provider key');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail =
+          Array.isArray(err.details) && err.details[0]?.message ? `: ${err.details[0].message}` : '';
+        throw new Error(`${err.error || 'Failed to delete provider key'}${detail}`);
+      }
     } catch (e) {
       console.error('API Error deleteProviderKey', e);
       throw e;

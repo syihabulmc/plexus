@@ -8,6 +8,10 @@ import type { ResolvedAdapter } from '../../types/provider-adapter';
 import { applyGeminiThinkingConfig, getApiMetadata } from '../providers/provider-api-selection';
 import { isClaudeMaskingApiKeyRoute, isPiAiRoute } from '../oauth/oauth-dispatcher';
 import {
+  resolveSelectedKeyLabel,
+  selectProviderKey,
+} from '../providers/provider-request-headers';
+import {
   isCodexCliShapedBody,
   isNativeOAuthProvider,
   prepareGenericOAuthDispatch,
@@ -255,13 +259,33 @@ export async function buildRequestPayload(
     const provider = (
       maskingApiKeyRoute ? 'anthropic' : route.config.oauth_provider || route.provider
     ) as string;
+    // Claude-masking API-key routes can use either the legacy `api_key`
+    // field or a multi-key `api_keys` array. `selectProviderKey` picks
+    // the first healthy key (sorted by priority) and stamps
+    // `route.selectedKeyId` / `route.selectedKeyLabel` for downstream
+    // cooldowns and the usage record. When no `api_keys` is configured
+    // (or the array is empty) the call is a no-op and we fall through to
+    // the legacy single-key path.
+    let maskingApiKey: string;
+    if (maskingApiKeyRoute) {
+      const selectedKey = await selectProviderKey(route);
+      if (selectedKey) {
+        route.selectedKeyId = selectedKey.id;
+        route.selectedKeyLabel = resolveSelectedKeyLabel(selectedKey);
+        maskingApiKey = selectedKey.api_key;
+      } else {
+        maskingApiKey = route.config.api_key ?? '';
+      }
+    } else {
+      maskingApiKey = '';
+    }
     const prepared: PreparedOAuthRequest = await prepareNativeOAuthDispatch({
       provider: provider as any,
       modelId: route.model,
       nativeBody: payload,
       streaming: !!request.stream,
       oauthAccountId: route.config.oauth_account?.trim(),
-      maskingApiKey: maskingApiKeyRoute ? (route.config.api_key ?? '') : null,
+      maskingApiKey: maskingApiKeyRoute ? maskingApiKey : null,
       codexPassthrough: codexCliPassthrough,
       // `targetApiType` here is the resolved wire type (effectiveApiType) that
       // request-manager passes for native OAuth routes — Copilot needs it to

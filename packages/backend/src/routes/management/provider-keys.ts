@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { ConfigService } from '../../services/configuration/config-service';
+import { getDatabase } from '../../db/client';
 
 /**
  * Provider keys management routes. Admin-only. Each key is treated as
@@ -128,21 +129,26 @@ export async function registerProviderKeyRoutes(fastify: FastifyInstance): Promi
     // Zod treats null as type error) becomes '' which the repo
     // interprets as "no note".
     const postNotes = rest.notes === '' ? '' : rest.notes;
-    const key = await repo.saveProviderKey(id, {
-      ...rest,
-      notes: postNotes,
-      label: ensureLabel(rest.label),
-      provider_id: String(providerId),
-      priority: priority ?? 0,
+    // Wrap insert + resequence in a single transaction so a partial
+    // failure can't leave the sequence in a half-renumbered state.
+    const key = await getDatabase().transaction(async () => {
+      const saved = await repo.saveProviderKey(id, {
+        ...rest,
+        notes: postNotes,
+        label: ensureLabel(rest.label),
+        provider_id: String(providerId),
+        priority: priority ?? Number.MAX_SAFE_INTEGER,
+      });
+      // Empty priority = append to the end; an explicit priority positions
+      // the key at that place and shifts the rest.
+      await resequenceProviderKeys(
+        repo,
+        String(providerId),
+        id,
+        priority !== undefined && priority >= 1 ? priority - 1 : Number.MAX_SAFE_INTEGER
+      );
+      return saved;
     });
-    // Empty priority = append to the end; an explicit priority positions
-    // the key at that place and shifts the rest.
-    await resequenceProviderKeys(
-      repo,
-      String(providerId),
-      id,
-      priority !== undefined && priority >= 1 ? priority - 1 : Number.MAX_SAFE_INTEGER
-    );
     // Repo writes bypass ConfigService's cache invalidation — rebuild
     // so the dispatcher / quota menu reflect the change.
     await configService.flush();
@@ -209,30 +215,35 @@ export async function registerProviderKeyRoutes(fastify: FastifyInstance): Promi
       priority: parsed.data.priority ?? existing.priority,
     };
 
-    const key = await repo.saveProviderKey(id, merged);
-    if (providerChanged) {
-      // Moving a key between providers leaves a gap in the old provider's
-      // priority sequence. Resequence BOTH providers to maintain 1..N.
-      await resequenceProviderKeys(
-        repo,
-        String(existing.provider_id),
-        id,
-        Number.MAX_SAFE_INTEGER // append to the end of the new provider
-      );
-      await resequenceProviderKeys(
-        repo,
-        providerId,
-        id,
-        Number.MAX_SAFE_INTEGER
-      );
-    } else if (parsed.data.priority !== undefined) {
-      await resequenceProviderKeys(
-        repo,
-        providerId,
-        id,
-        parsed.data.priority >= 1 ? parsed.data.priority - 1 : Number.MAX_SAFE_INTEGER
-      );
-    }
+    // Wrap the update + any resequence in one transaction so the
+    // priority sequence stays gapless even on partial failure.
+    const key = await getDatabase().transaction(async () => {
+      const saved = await repo.saveProviderKey(id, merged);
+      if (providerChanged) {
+        // Moving a key between providers leaves a gap in the old provider's
+        // priority sequence. Resequence BOTH providers to maintain 1..N.
+        await resequenceProviderKeys(
+          repo,
+          String(existing.provider_id),
+          id,
+          Number.MAX_SAFE_INTEGER // append to the end of the new provider
+        );
+        await resequenceProviderKeys(
+          repo,
+          providerId,
+          id,
+          Number.MAX_SAFE_INTEGER
+        );
+      } else if (parsed.data.priority !== undefined) {
+        await resequenceProviderKeys(
+          repo,
+          providerId,
+          id,
+          parsed.data.priority >= 1 ? parsed.data.priority - 1 : Number.MAX_SAFE_INTEGER
+        );
+      }
+      return saved;
+    });
     await configService.flush();
     const idToSlug = await repo.getProviderIdToSlugMap();
     return { key: { ...key, provider_id: idToSlug.get(key.provider_id) ?? key.provider_id } };
@@ -275,19 +286,25 @@ export async function registerProviderKeyRoutes(fastify: FastifyInstance): Promi
     const requested = bulkKeys.find((k) => k.priority !== undefined && k.priority >= 1)?.priority;
     let next = requested ?? maxExisting + 1;
 
-    const created: any[] = [];
-    for (const k of bulkKeys) {
-      const id = randomUUID();
-      const key = await repo.saveProviderKey(id, {
-        provider_id: String(providerId),
-        label: ensureLabel(k.label),
-        api_key: k.api_key,
-        enabled: k.enabled ?? true,
-        priority: next,
-      });
-      created.push(key);
-      next += 1;
-    }
+    // Wrap the whole bulk insert in a single transaction so a failure
+    // mid-batch can't leave some keys persisted with their priorities
+    // and others not.
+    const created: any[] = await getDatabase().transaction(async () => {
+      const inserted: any[] = [];
+      for (const k of bulkKeys) {
+        const id = randomUUID();
+        const key = await repo.saveProviderKey(id, {
+          provider_id: String(providerId),
+          label: ensureLabel(k.label),
+          api_key: k.api_key,
+          enabled: k.enabled ?? true,
+          priority: next,
+        });
+        inserted.push(key);
+        next += 1;
+      }
+      return inserted;
+    });
 
     await configService.flush();
 

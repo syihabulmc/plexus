@@ -30,12 +30,17 @@ import { calculateCosts } from '../utils/calculate-costs';
 import { applyProviderReportedCost, applyUsageCostDetails } from '../utils/provider-cost';
 import { extractUsageCostDetails } from '../utils/usage-normalizer';
 import {
-  buildRawUpstreamHeaders,
+  buildRawUpstreamHeadersForKey,
   buildRawUpstreamUrl,
   executeRawUpstreamRequest,
   filterRawResponseHeaders,
   validateRawProviderSlug,
 } from '../services/dispatch/raw-passthrough';
+import {
+  resolveSelectedKeyLabel,
+  selectProviderKey,
+} from '../services/providers/provider-request-headers';
+import type { RouteResult } from '../services/routing/router';
 
 const RAW_METHODS = ['DELETE', 'GET', 'HEAD', 'PATCH', 'POST', 'PUT'] as const;
 
@@ -335,7 +340,28 @@ export async function registerRawPassthroughRoutes(
           }
         }
 
-        if (!ConcurrencyTracker.getInstance().acquire(providerSlug, rawModel)) {
+        // Build a synthetic RouteResult so `selectProviderKey` can pick
+        // from `provider.api_keys` (multi-key path). The legacy single
+        // `provider.api_key` is the fallback when no keys are configured.
+        const rawRoute: RouteResult = {
+          provider: providerSlug,
+          model: rawModel,
+          config: provider,
+        };
+
+        // Pre-select the API key BEFORE acquiring the concurrency slot so
+        // multi-key providers get per-key slots. The downstream call to
+        // `selectProviderKey` inside the `try` block honors the pre-stamped
+        // `selectedKeyId` and reuses the same pick. Mirrors the chat path
+        // in request-manager.ts.
+        if (Array.isArray(provider.api_keys) && provider.api_keys.length > 0 && !rawRoute.selectedKeyId) {
+          const preSelected = await selectProviderKey(rawRoute);
+          if (preSelected) {
+            rawRoute.selectedKeyId = preSelected.id;
+          }
+        }
+
+        if (!ConcurrencyTracker.getInstance().acquire(providerSlug, rawModel, rawRoute.selectedKeyId)) {
           usageRecord.responseStatus = 'concurrency_exceeded';
           usageRecord.durationMs = Date.now() - startTime;
           usageStorage.saveRequest(usageRecord as UsageRecord);
@@ -354,9 +380,16 @@ export async function registerRawPassthroughRoutes(
         timeout.unref?.();
 
         try {
-          const upstreamHeaders = buildRawUpstreamHeaders(
+          const selectedKey = await selectProviderKey(rawRoute);
+          if (selectedKey) {
+            rawRoute.selectedKeyId = selectedKey.id;
+            rawRoute.selectedKeyLabel = resolveSelectedKeyLabel(selectedKey);
+          }
+          const apiKey = selectedKey?.api_key ?? provider.api_key ?? '';
+          const upstreamHeaders = buildRawUpstreamHeadersForKey(
             request.headers,
             provider,
+            apiKey,
             body ? body.byteLength : null
           );
           const upstream = await executeRawUpstreamRequest({
@@ -544,7 +577,7 @@ export async function registerRawPassthroughRoutes(
           }
           clearTimeout(timeout);
           disconnectDetection.cleanup();
-          ConcurrencyTracker.getInstance().release(providerSlug, rawModel);
+          ConcurrencyTracker.getInstance().release(providerSlug, rawModel, rawRoute.selectedKeyId);
         }
       },
     });

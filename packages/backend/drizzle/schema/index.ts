@@ -60,6 +60,7 @@ export {
 
 // Config tables (PostgreSQL exports)
 export { providers as pgProviders } from './postgres/providers';
+export { providerKeys as pgProviderKeys } from './postgres/providers';
 export { providerModels as pgProviderModels } from './postgres/provider-models';
 export { modelAliases as pgModelAliases } from './postgres/model-aliases';
 export { modelAliasTargets as pgModelAliasTargets } from './postgres/model-alias-targets';

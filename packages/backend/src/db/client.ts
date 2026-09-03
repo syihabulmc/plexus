@@ -106,6 +106,7 @@ export function initializeDatabase(connectionString?: string) {
       systemSettings,
       oauthCredentials,
       customCheckers,
+      providerKeys: providerKeysTable,
     } = sqliteSchema;
 
     currentSchema = sqliteSchema;
@@ -128,6 +129,7 @@ export function initializeDatabase(connectionString?: string) {
       systemSettings,
       oauthCredentials,
       customCheckers,
+      providerKeys: providerKeysTable,
     };
 
     if (connStr.startsWith('libsql://') || connStr.startsWith('turso://')) {
@@ -202,6 +204,7 @@ export function initializeDatabase(connectionString?: string) {
       systemSettings,
       oauthCredentials,
       customCheckers,
+      providerKeys: pgProviderKeys,
     } = pgSchema;
 
     currentSchema = pgSchema;
@@ -224,6 +227,7 @@ export function initializeDatabase(connectionString?: string) {
       systemSettings,
       oauthCredentials,
       customCheckers,
+      providerKeys: pgProviderKeys,
     };
 
     if (postgresDriver === 'pglite') {
