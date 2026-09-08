@@ -7,7 +7,6 @@ bun = "latest"
 "github:universal-ctags/ctags-nightly-build" = "latest"
 lefthook = "latest"
 node = "24"
-"npm:@kodus/cli" = "latest"
 "npm:greptile" = "latest"
 
 [env]

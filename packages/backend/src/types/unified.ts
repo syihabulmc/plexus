@@ -60,6 +60,7 @@ export interface UnifiedToolFunction {
     $schema?: string;
   };
   parametersJsonSchema?: any; // Newer format supporting full JSON Schema (anyOf, oneOf, const)
+  strict?: boolean;
 }
 
 export interface UnifiedTool {
@@ -532,15 +533,46 @@ export interface UnifiedSpeechResponse {
 }
 
 // Unified Image Generation Request
+export type ImageResolution = '512' | '1K' | '2K' | '4K';
+
+export interface UnifiedImageReference {
+  type: 'image_url';
+  image_url: {
+    url: string;
+  };
+  media_type?: string;
+}
+
+export interface UnifiedImageProviderPreferences {
+  only?: string[];
+  ignore?: string[];
+  order?: string[];
+  sort?: string | Record<string, any>;
+  allow_fallbacks?: boolean;
+  options?: Record<string, any>;
+}
+
 export interface UnifiedImageGenerationRequest {
   requestId?: string;
   model: string;
   prompt: string;
   n?: number;
+  /** OpenRouter's normalized resolution tier. */
+  resolution?: ImageResolution;
+  /** Normalized ratio, for example `16:9` or `1:1`. */
+  aspect_ratio?: string;
+  /** Legacy pixel size or OpenRouter's tier-valued convenience size. */
   size?: string;
   response_format?: 'url' | 'b64_json';
   quality?: string;
   style?: string;
+  output_format?: 'png' | 'jpeg' | 'webp' | 'svg';
+  background?: 'auto' | 'transparent' | 'opaque';
+  output_compression?: number;
+  seed?: number;
+  stream?: boolean;
+  input_references?: UnifiedImageReference[];
+  provider?: UnifiedImageProviderPreferences;
   user?: string;
   // Internal tracking
   incomingApiType?: string;
@@ -554,17 +586,22 @@ export interface UnifiedImageGenerationResponse {
   data: Array<{
     url?: string;
     b64_json?: string;
+    media_type?: string;
     revised_prompt?: string;
   }>;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
     total_tokens?: number;
+    cost?: number;
   };
   plexus?: {
     provider?: string;
     model?: string;
     apiType?: string;
+    targetApiType?: string;
     pricing?: any;
     providerDiscount?: number;
     canonicalModel?: string;
@@ -601,17 +638,22 @@ export interface UnifiedImageEditResponse {
   data: Array<{
     url?: string;
     b64_json?: string;
+    media_type?: string;
     revised_prompt?: string;
   }>;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
     total_tokens?: number;
+    cost?: number;
   };
   plexus?: {
     provider?: string;
     model?: string;
     apiType?: string;
+    targetApiType?: string;
     pricing?: any;
     providerDiscount?: number;
     canonicalModel?: string;

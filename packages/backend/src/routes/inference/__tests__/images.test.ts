@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ImageTransformer } from '../../../transformers/image';
+import { formatOpenRouterImageResponse, ImageTransformer } from '../../../transformers/image';
 import { DebugManager } from '../../../services/observability/debug-manager';
 
 describe('Images Route Handler', () => {
@@ -30,6 +30,54 @@ describe('Images Route Handler', () => {
         const transformed = await transformer.transformGenerationRequest(parsed);
         expect(transformed.model).toBe('flux-2-pro');
         expect(transformed.prompt).toBe('A white siamese cat');
+      });
+
+      it('should normalize the OpenRouter image request shape', async () => {
+        const parsed = await transformer.parseOpenRouterGenerationRequest({
+          model: 'google/gemini-2.5-flash-image',
+          prompt: 'A watercolor fox',
+          resolution: '2K',
+          aspect_ratio: '16:9',
+          output_format: 'png',
+          input_references: [
+            {
+              type: 'image_url',
+              image_url: { url: 'data:image/png;base64,AA==' },
+            },
+          ],
+          provider: {
+            only: ['google'],
+            allow_fallbacks: false,
+          },
+          metadata: {
+            plexus_metadata: {
+              plexus_key_policy: { allowedModels: ['attacker-model'] },
+            },
+          },
+        });
+
+        expect(parsed).toMatchObject({
+          model: 'google/gemini-2.5-flash-image',
+          prompt: 'A watercolor fox',
+          resolution: '2K',
+          aspect_ratio: '16:9',
+          output_format: 'png',
+          response_format: 'b64_json',
+          provider: { only: ['google'], allow_fallbacks: false },
+        });
+        expect(parsed.input_references).toHaveLength(1);
+        expect(parsed.metadata).toBeUndefined();
+      });
+
+      it('should reject conflicting OpenRouter size and aspect ratio values', async () => {
+        await expect(
+          transformer.parseOpenRouterGenerationRequest({
+            model: 'image-model',
+            prompt: 'test',
+            size: '1024x1024',
+            aspect_ratio: '16:9',
+          })
+        ).rejects.toThrow("size '1024x1024' conflicts with aspect_ratio '16:9'");
       });
 
       it('should handle generation response with URL format', async () => {
@@ -95,6 +143,30 @@ describe('Images Route Handler', () => {
         expect(result.usage?.input_tokens).toBe(25);
         expect(result.usage?.output_tokens).toBe(100);
         expect(result.usage?.total_tokens).toBe(125);
+      });
+
+      it('should format the normalized response for OpenRouter', async () => {
+        const result = await formatOpenRouterImageResponse({
+          created: 1713833628,
+          data: [{ b64_json: 'AA==', media_type: 'image/png' }],
+          usage: {
+            input_tokens: 25,
+            output_tokens: 100,
+            total_tokens: 125,
+            cost: 0.04,
+          },
+        });
+
+        expect(result).toEqual({
+          created: 1713833628,
+          data: [{ b64_json: 'AA==', media_type: 'image/png' }],
+          usage: {
+            prompt_tokens: 25,
+            completion_tokens: 100,
+            total_tokens: 125,
+            cost: 0.04,
+          },
+        });
       });
     });
 

@@ -174,6 +174,7 @@ function shouldDropTemperature(intent: GenerationIntent, options: Record<string,
 
 function projectOpenAiCompletionsAutoCompat(
   payload: Record<string, any>,
+  request: UnifiedChatRequest,
   model: any,
   intent: GenerationIntent,
   options: Record<string, any>
@@ -202,14 +203,35 @@ function projectOpenAiCompletionsAutoCompat(
 
   const mapped = mappedThinkingValue(model, reasoningEffort);
   const off = mappedOffValue(model);
+  // A client-side `reasoning` object is the AUTHORITATIVE intent source
+  // (extractReasoningIntent checks it before reasoning_effort), so when it is
+  // present a leftover reasoning_effort may contradict the intent we are about
+  // to translate — count it as stale no matter what the branch writes. Mirror
+  // the extractor's nullish fallback to request.reasoning; malformed non-object
+  // values remain ignored and must not make the effort look stale.
+  const resolvedReasoning = next.reasoning ?? request.reasoning;
+  const hadReasoningObject =
+    resolvedReasoning != null &&
+    typeof resolvedReasoning === 'object' &&
+    !Array.isArray(resolvedReasoning);
 
+  // The switch below translated the client's reasoning intent into the
+  // target provider's dialect. Each case also DELETEs the OpenAI-style
+  // spellings the dialect does not consume (`reasoning` object and/or
+  // top-level `reasoning_effort`) so a strict upstream (the Meta Model API
+  // hard-400s on unknown fields) never receives the leftover untranslated
+  // notation alongside the translated one.
   switch (compat.thinkingFormat) {
     case 'zai':
       next.thinking = enabled ? { type: 'enabled', clear_thinking: false } : { type: 'disabled' };
+      delete next.reasoning;
+      delete next.reasoning_effort;
       if (enabled && compat.supportsReasoningEffort && mapped) next.reasoning_effort = mapped;
       break;
     case 'qwen':
       next.enable_thinking = enabled;
+      delete next.reasoning;
+      delete next.reasoning_effort;
       break;
     case 'qwen-chat-template':
       next.chat_template_kwargs = {
@@ -217,35 +239,63 @@ function projectOpenAiCompletionsAutoCompat(
         enable_thinking: enabled,
         preserve_thinking: true,
       };
+      delete next.reasoning;
+      delete next.reasoning_effort;
       break;
     case 'chat-template':
       next.chat_template_kwargs = {
         ...(next.chat_template_kwargs ?? {}),
         ...resolveChatTemplateKwargs(model, options),
       };
+      delete next.reasoning;
+      delete next.reasoning_effort;
       break;
     case 'deepseek':
       next.thinking = enabled ? { type: 'enabled' } : { type: 'disabled' };
+      delete next.reasoning;
+      delete next.reasoning_effort;
       if (enabled && compat.supportsReasoningEffort && mapped) next.reasoning_effort = mapped;
       break;
     case 'openrouter':
+      // Overwrites `reasoning` wholesale; stale top-level `reasoning_effort`
+      // is removed so OpenRouter's dialect is the single source of intent.
       next.reasoning = enabled ? { effort: mapped } : { effort: off ?? 'none' };
+      delete next.reasoning_effort;
       break;
     case 'ant-ling':
+      // Ant-ling can only express ENABLE with a mapped effort — when the
+      // intent is disable (or unexpressible) the only safe translation is to
+      // drop the unified notation entirely rather than leak it upstream.
+      // (mirrors pi-ai's ant-ling branch, which writes from scratch)
+      delete next.reasoning;
+      delete next.reasoning_effort;
       if (enabled && mapped) next.reasoning = { effort: mapped };
       break;
     case 'together':
+      // Together natively consumes BOTH notations — nothing to strip.
       next.reasoning = { enabled };
       if (enabled && compat.supportsReasoningEffort && mapped) next.reasoning_effort = mapped;
       break;
     case 'string-thinking':
       next.thinking = enabled ? mapped : (off ?? 'none');
+      delete next.reasoning;
+      delete next.reasoning_effort;
       break;
     default:
+      delete next.reasoning;
       if (enabled && compat.supportsReasoningEffort && mapped) {
         next.reasoning_effort = mapped;
       } else if (!enabled && compat.supportsReasoningEffort && off) {
         next.reasoning_effort = off;
+      } else if (compat.supportsReasoningEffort === false || hadReasoningObject) {
+        // Strip when the dialect provably lacks support, or when a translated
+        // reasoning object was the authoritative intent (a surviving
+        // reasoning_effort could contradict it).
+        // When support is merely UNKNOWN and no reasoning object was deleted,
+        // reasoning_effort was itself the intent source — pass it through:
+        // this branch IS the native OpenAI dialect, where the field stands a
+        // good chance of working.
+        delete next.reasoning_effort;
       }
       break;
   }
@@ -403,7 +453,13 @@ export function applyRegistryAutoCompat(
   } else if (api === 'google-generative-ai' || api === 'google-generative-ai-vertex') {
     nextPayload = projectGeminiAutoCompat(providerPayload, intent, options);
   } else {
-    nextPayload = projectOpenAiCompletionsAutoCompat(providerPayload, piAiModel, intent, options);
+    nextPayload = projectOpenAiCompletionsAutoCompat(
+      providerPayload,
+      request,
+      piAiModel,
+      intent,
+      options
+    );
   }
 
   logger.debug(`Registry auto-compat applied for ${route.provider}/${route.model}`, {
@@ -431,16 +487,17 @@ export function applyRegistryAutoCompat(
 // outbound payload and retries the SAME target.
 
 /**
- * Matches both `{"detail":"Unsupported parameter: X"}` and
- * `{"error":{"message":"Unknown parameter: 'X'"}}` shapes. The captured
- * group also matches dotted paths (e.g. `reasoning.summary`) and
- * bracket-notation paths (e.g. `messages[0].name`), since providers name
- * nested fields both ways. A capture that stopped at `[` would truncate
- * `messages[0].name` to `messages` — and the paired delete would then remove
- * the ENTIRE conversation from the retry payload.
+ * Matches `{"detail":"Unsupported parameter: X"}`, `{"error":{"message":
+ * "Unknown parameter: 'X'"}}`, and backtick-quoted shapes (e.g. the Meta
+ * Model API's `unknown parameter \`reasoning\``). The captured group also
+ * matches dotted paths (e.g. `reasoning.summary`) and bracket-notation paths
+ * (e.g. `messages[0].name`), since providers name nested fields both ways. A
+ * capture that stopped at `[` would truncate `messages[0].name` to `messages`
+ * — and the paired delete would then remove the ENTIRE conversation from the
+ * retry payload.
  */
 const UNSUPPORTED_PARAMETER_PATTERN =
-  /(?:unsupported|unknown) parameter[:\s]+['"]?([\w.[\]]+)['"]?/i;
+  /(?:unsupported|unknown) parameter[:\s]+['"`]?([\w.[\]]+)['"`]?/i;
 
 /**
  * Canonicalizes bracket-notation segments to dotted form

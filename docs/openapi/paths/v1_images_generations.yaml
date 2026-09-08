@@ -10,7 +10,7 @@ post:
     content:
       application/json:
         schema:
-          $ref: ../components/schemas/ImageGenerationRequest.yaml
+          $ref: ../components/schemas/LegacyImageGenerationRequest.yaml
         examples:
           basic:
             value:

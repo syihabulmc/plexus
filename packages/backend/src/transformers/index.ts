@@ -8,4 +8,6 @@ export * from './embeddings';
 export * from './transcriptions';
 export * from './speech';
 export * from './image';
+export * from './images/gemini';
+export * from './images/openrouter';
 export * from './oauth/oauth-claude';

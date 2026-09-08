@@ -15,7 +15,8 @@ const KNOWN_APIS = [
   'embeddings',
   'transcriptions',
   'speech',
-  'images',
+  'openai-images',
+  'openrouter-images',
   'responses',
   'ollama',
 ];
@@ -571,7 +572,7 @@ export function useProviderForm() {
       if (types.includes(apiType) && types.length === 1) return editingProvider.apiBaseUrl;
       return '';
     }
-    return (editingProvider.apiBaseUrl as any)?.[apiType] || '';
+    return getApiBaseUrlMap()[apiType] || '';
   };
 
   const addApiBaseUrlEntry = () => {

@@ -12,7 +12,8 @@ const KNOWN_APIS = [
   'embeddings',
   'transcriptions',
   'speech',
-  'images',
+  'openai-images',
+  'openrouter-images',
   'responses',
   'ollama',
 ];
@@ -97,6 +98,10 @@ export function ProviderApiUrlsEditor({
           <li>
             <span style={{ fontWeight: 600 }}>completions</span> — OpenAI text/code completion
             endpoints (e.g. <code className="text-primary">/v1/completions</code> or FIM models)
+          </li>
+          <li>
+            <span style={{ fontWeight: 600 }}>openrouter-images</span> — OpenRouter dedicated image
+            API; use the <code className="text-primary">/api/v1</code> base URL
           </li>
           <li>
             <span style={{ fontWeight: 600 }}>ollama</span> — Native Ollama API, use the root URL

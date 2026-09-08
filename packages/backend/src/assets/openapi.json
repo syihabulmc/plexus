@@ -886,6 +886,54 @@
         "operationId": "postV1AudioSpeech"
       }
     },
+    "/v1/images": {
+      "post": {
+        "tags": [
+          "Inference — Images"
+        ],
+        "summary": "OpenRouter-compatible image generation",
+        "description": "Generates an image from a normalized OpenRouter-style request. Plexus\ntranslates the request into the selected provider's native image API and\nnormalizes the response back to the image response contract.\n\nBuffered generation is supported in this operation. Streaming image\nevents are not currently supported.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageGenerationRequest"
+              },
+              "examples": {
+                "basic": {
+                  "value": {
+                    "model": "image-model",
+                    "prompt": "A red panda astronaut floating in space.",
+                    "resolution": "2K",
+                    "aspect_ratio": "16:9"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated images.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid image request or unsupported target option."
+          },
+          "401": {
+            "description": "Authentication required or invalid credentials."
+          }
+        },
+        "operationId": "postV1Images"
+      }
+    },
     "/v1/images/generations": {
       "post": {
         "tags": [
@@ -898,7 +946,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ImageGenerationRequest"
+                "$ref": "#/components/schemas/LegacyImageGenerationRequest"
               },
               "examples": {
                 "basic": {
@@ -11331,10 +11379,12 @@
         "properties": {
           "model": {
             "type": "string",
-            "description": "Model identifier (e.g. `dall-e-3`, `dall-e-2`)."
+            "minLength": 1,
+            "description": "Image generation model or Plexus model alias."
           },
           "prompt": {
             "type": "string",
+            "minLength": 1,
             "description": "Text description of the desired image."
           },
           "n": {
@@ -11342,18 +11392,144 @@
             "minimum": 1,
             "maximum": 10,
             "default": 1,
-            "description": "Number of images to generate (1-10)."
+            "description": "Upper bound on the number of images to generate."
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "512",
+              "1K",
+              "2K",
+              "4K"
+            ],
+            "description": "Normalized resolution tier. Concrete dimensions depend on the target provider."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "description": "Normalized output aspect ratio, such as 1:1, 16:9, or 9:16."
           },
           "size": {
             "type": "string",
+            "description": "Convenience resolution tier or explicit dimensions such as 2048x2048."
+          },
+          "quality": {
+            "type": "string",
             "enum": [
-              "256x256",
-              "512x512",
-              "1024x1024",
-              "1792x1024",
-              "1024x1792"
+              "auto",
+              "low",
+              "medium",
+              "high"
             ],
-            "description": "Output dimensions. Not all sizes are available on all models.\n- `256x256`, `512x512`, `1024x1024` — available on DALL-E 2 and 3. - `1792x1024`, `1024x1792` — widescreen/portrait, DALL-E 3 only.\n"
+            "description": "Requested rendering quality where supported by the target provider."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp",
+              "svg"
+            ],
+            "description": "Encoding of generated image bytes where supported by the target provider."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "transparent",
+              "opaque"
+            ],
+            "description": "Background treatment where supported by the target provider."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Compression level for formats with a compression control."
+          },
+          "seed": {
+            "type": "integer",
+            "description": "Optional deterministic generation seed where supported."
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false,
+            "description": "Image streaming is reserved for a future implementation."
+          },
+          "input_references": {
+            "type": "array",
+            "maxItems": 16,
+            "description": "Reference images used for image-conditioned generation.",
+            "items": {
+              "type": "object",
+              "required": [
+                "type",
+                "image_url"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "image_url"
+                  ]
+                },
+                "image_url": {
+                  "type": "object",
+                  "required": [
+                    "url"
+                  ],
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "description": "HTTP(S) URL or base64 image data URL."
+                    }
+                  }
+                },
+                "media_type": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "provider": {
+            "type": "object",
+            "description": "Plexus provider routing preferences.",
+            "properties": {
+              "only": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ignore": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "order": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "allow_fallbacks": {
+                "type": "boolean"
+              },
+              "sort": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "options": {
+                "type": "object"
+              }
+            }
           },
           "response_format": {
             "type": "string",
@@ -11361,27 +11537,11 @@
               "url",
               "b64_json"
             ],
-            "default": "url",
-            "description": "How the image is returned.\n- **url** — Temporary URL (expires after 1 hour). - **b64_json** — Base64-encoded image data.\n"
-          },
-          "quality": {
-            "type": "string",
-            "enum": [
-              "standard",
-              "hd",
-              "high",
-              "medium",
-              "low"
-            ],
-            "description": "Detail level. Values vary by provider.\n- **standard** — Default quality. - **hd** — Higher detail (DALL-E 3). - **high**, **medium**, **low** — Provider-specific detail levels.\n"
+            "description": "Legacy OpenAI delivery format. OpenRouter-shaped responses use base64 image data."
           },
           "style": {
             "type": "string",
-            "enum": [
-              "vivid",
-              "natural"
-            ],
-            "description": "Visual style.\n- **vivid** — Generates more dramatic, stylized images. - **natural** — More realistic, natural-looking images.\n"
+            "description": "Legacy OpenAI image style where supported."
           },
           "user": {
             "type": "string",
@@ -11393,7 +11553,8 @@
         "type": "object",
         "properties": {
           "created": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Unix timestamp when the images were generated."
           },
           "data": {
             "type": "array",
@@ -11408,9 +11569,29 @@
                 "b64_json": {
                   "type": "string"
                 },
+                "media_type": {
+                  "type": "string"
+                },
                 "revised_prompt": {
                   "type": "string"
                 }
+              }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": {
+                "type": "integer"
+              },
+              "completion_tokens": {
+                "type": "integer"
+              },
+              "total_tokens": {
+                "type": "integer"
+              },
+              "cost": {
+                "type": "number"
               }
             }
           }
@@ -11419,6 +11600,75 @@
           "created",
           "data"
         ]
+      },
+      "LegacyImageGenerationRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "prompt"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model identifier, such as dall-e-3."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Text description of the desired image."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to generate."
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "256x256",
+              "512x512",
+              "1024x1024",
+              "1792x1024",
+              "1024x1792"
+            ],
+            "description": "Output dimensions where supported by the target provider."
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "url",
+              "b64_json"
+            ],
+            "default": "url",
+            "description": "How the image is returned."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "hd",
+              "high",
+              "medium",
+              "low"
+            ],
+            "description": "Legacy OpenAI quality value."
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "vivid",
+              "natural"
+            ],
+            "description": "Legacy OpenAI visual style."
+          },
+          "user": {
+            "type": "string",
+            "description": "User identifier for content policy tracking."
+          }
+        }
       },
       "ImageEditRequest": {
         "type": "object",

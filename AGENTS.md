@@ -86,11 +86,19 @@ Use these commands exactly:
 - Type check: `bun run typecheck`
 - Format: `bun run format`
 - Format check: `bun run format:check`
+- Cora review of staged changes: `bun run code:review:staged`
+- Cora review of unstaged changes: `bun run code:review:unstaged`
+- Cora review of the branch against `origin/main`: `bun run code:review:branch`
+- Cora review of the latest commit: `bun run code:review:commit`
 
 Notes:
 - `bun run dev` derives the backend port from the worktree name and runs the frontend watcher.
 - `bun run dev:agent` boots or attaches to a workspace script target (defaults to `dev:full`), managed by Paseo when available with automatic log streaming, and falling back seamlessly to direct background process execution for non-Paseo environments. Use `--detach` to return immediately once healthy.
 - `bun test` is intentionally blocked. Use `bun run test`.
+- Cora reviews are manual and are not part of the commit hooks. Use the matching
+  `code:review:*` command when a review is useful if Cora is available. If Cora is
+  unavailable, skip the review without installing or configuring it; do not invoke
+  Cora automatically during commits.
 
 ## Project overview
 

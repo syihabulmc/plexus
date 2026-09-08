@@ -1,0 +1,213 @@
+name: Cora AI Code Review
+run-name: "Cora Review: PR #${{ github.event.pull_request.number }}"
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+
+concurrency:
+  group: cora-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  cora-review:
+    name: Cora Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check whether Cora should run
+        id: preflight
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+            // Load trusted community contributors from repo file
+            const trustedUsers = new Set();
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: '.github/workflows/trusted-contributors',
+              });
+              const content = Buffer.from(data.content, 'base64').toString('utf8');
+              for (const line of content.split('\n')) {
+                const username = line.trim();
+                if (username) trustedUsers.add(username);
+              }
+            } catch {
+              // File not found or unreadable — treat as empty list
+            }
+
+            const pull = context.payload.pull_request;
+            let shouldRun = false;
+            let reason = '';
+
+            if (pull.draft) {
+              reason = 'Skipping draft PR until it is marked ready for review';
+            } else if (pull.user.login === 'github-actions[bot]') {
+              shouldRun = true;
+              reason = 'Trusted PR author: github-actions[bot]';
+            } else if (trustedAssociations.has(pull.author_association)) {
+              shouldRun = true;
+              reason = `Trusted PR author association: ${pull.author_association}`;
+            } else if (trustedUsers.has(pull.user.login)) {
+              shouldRun = true;
+              reason = `Trusted community member: ${pull.user.login}`;
+            } else {
+              reason = `Skipping automatic run for external PR author association: ${pull.author_association}`;
+            }
+
+            core.info(reason);
+            core.setOutput('should_run', String(shouldRun));
+
+      - name: Checkout PR head
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Normalize LLM base URL
+        if: steps.preflight.outputs.should_run == 'true'
+        id: baseurl
+        env:
+          LLM_API_HOST: ${{ secrets.LLM_API_HOST }}
+        run: |
+          base="${LLM_API_HOST%/}"
+          case "$base" in
+            */v1) ;;
+            *) base="$base/v1" ;;
+          esac
+          echo "url=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Run Cora AI Code Review
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: codecoradev/cora-review-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cora-api-key: ${{ secrets.LLM_API_KEY }}
+          cora-base-url: ${{ steps.baseurl.outputs.url }}
+          cora-model: ${{ vars.LLM_MODEL_ID }}
+          base-branch: origin/main
+          upload-sarif: 'false'
+
+      - name: Post Cora review status
+        id: cora-status
+        if: always() && steps.preflight.outputs.should_run == 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- cora-review-status -->';
+            const pullNumber = context.payload.pull_request.number;
+            let sarif;
+
+            try {
+              sarif = JSON.parse(fs.readFileSync('cora-results.sarif', 'utf8'));
+            } catch {
+              sarif = null;
+            }
+
+            const results = (sarif?.runs ?? []).flatMap((run) => run.results ?? []);
+            const fallbackResult = results.find((result) =>
+              result.level === 'warning'
+              && (result.message?.text ?? '').toLowerCase().includes('could not complete'),
+            );
+            const fallback = Boolean(fallbackResult);
+            const failureMessage = !sarif
+              ? 'Cora did not produce a valid review result.'
+              : fallbackResult?.message?.text ?? '';
+            let status;
+
+            if (!sarif || fallback) {
+              status = `⚠️ **Cora review could not complete.** ${failureMessage}`;
+              core.warning(failureMessage);
+            } else if (results.length === 0) {
+              status = '✅ **Cora ran successfully.** No major concerns found.';
+            } else {
+              const findings = results.map((result) => {
+                const location = result.locations?.[0]?.physicalLocation;
+                const file = location?.artifactLocation?.uri;
+                const line = location?.region?.startLine;
+                const reference = file ? `\`${file}:${line ?? '?'}\`` : 'general';
+                const severity = result.level ?? 'note';
+                const message = result.message?.text ?? result.message?.markdown ?? 'No message';
+                return `- **${severity}** — ${reference}: ${message}`;
+              });
+              status = `⚠️ **Cora reported ${results.length} concern(s).**\n\n${findings.join('\n')}`;
+            }
+
+            const body = [
+              marker,
+              '## 🔍 Cora AI Code Review',
+              '',
+              status,
+              '',
+              '_Review focuses on major correctness, security, and maintainability concerns._',
+            ].join('\n');
+
+            core.setOutput('review_failed', String(!sarif || fallback));
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullNumber,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                body,
+              });
+            }
+
+      - name: Fail if Cora review did not complete
+        if: always() && steps.preflight.outputs.should_run == 'true' && steps.cora-status.outputs.review_failed == 'true'
+        run: |
+          echo "::error::Cora review did not complete. See the PR comment for the provider error."
+          exit 1
+
+      - name: Check for blocking Cora findings
+        if: steps.preflight.outputs.should_run == 'true'
+        run: |
+          python3 <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          try:
+              sarif = json.loads(Path('cora-results.sarif').read_text())
+          except (FileNotFoundError, json.JSONDecodeError):
+              sys.exit(0)
+
+          errors = [
+              result
+              for run in sarif.get('runs', [])
+              for result in run.get('results', [])
+              if result.get('level') == 'error'
+          ]
+          if errors:
+              print(f'Cora found {len(errors)} blocking issue(s).')
+              sys.exit(1)
+          PY
+
+      - name: Log skipped Cora run
+        if: steps.preflight.outputs.should_run != 'true'
+        run: echo "${{ steps.preflight.outputs.reason }}"

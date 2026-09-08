@@ -7,6 +7,7 @@ import { Badge } from '../ui/Badge';
 import { Tooltip } from '../ui/Tooltip';
 import type { Provider, CompactionSettings } from '../../lib/api';
 import { api } from '../../lib/api';
+import { ReasoningRewriteRulesEditor } from './ReasoningRewriteRulesEditor';
 
 export const KNOWN_ADAPTERS: { value: string; label: string; description: string }[] = [
   {
@@ -199,10 +200,7 @@ export function ProviderAdvancedEditor({
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
                   {KNOWN_ADAPTERS.filter(
-                    (a) =>
-                      a.value !== 'model_override' &&
-                      a.value !== 'reasoning_rewrite' &&
-                      a.value !== 'web_search_coercion'
+                    (a) => a.value !== 'model_override' && a.value !== 'web_search_coercion'
                   ).map((a) => {
                     const adapterEntries: any[] = editingProvider.adapter ?? [];
                     const active = adapterEntries.some(
@@ -251,6 +249,14 @@ export function ProviderAdvancedEditor({
                     );
                   })}
                 </div>
+
+                {/* Reasoning Rewrite rules editor (shared with per-model UI) */}
+                <ReasoningRewriteRulesEditor
+                  adapters={editingProvider.adapter ?? []}
+                  onChange={(next: any[]) =>
+                    setEditingProvider({ ...editingProvider, adapter: next })
+                  }
+                />
 
                 {/* Web Search Coercion — inline options editor */}
                 {(() => {

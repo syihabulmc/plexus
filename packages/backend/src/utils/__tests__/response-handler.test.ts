@@ -632,6 +632,19 @@ describe('handleResponse', () => {
       // Not 'empty' (would silently hide the failure) and not the initial
       // 'success' default — the error chunk must win over both.
       expect(usageRecord.responseStatus).toBe('error');
+      // The hard failure must also land in the inference-errors log so it
+      // surfaces instead of only reflecting on the usage record.
+      expect(mockStorage.saveError).toHaveBeenCalledWith(
+        'req-error-stream',
+        expect.any(Error),
+        expect.objectContaining({
+          apiType: 'chat',
+          provider: 'test-provider',
+          code: 'response_failed',
+          clientSignaled: true,
+        }),
+        undefined
+      );
     });
 
     test('stream with visible content THEN an error chunk still marks responseStatus="error"', async () => {
@@ -680,6 +693,12 @@ describe('handleResponse', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       expect(usageRecord.responseStatus).toBe('error');
+      expect(mockStorage.saveError).toHaveBeenCalledWith(
+        'req-content-then-error-stream',
+        expect.any(Error),
+        expect.objectContaining({ code: 'response_failed', clientSignaled: true }),
+        undefined
+      );
     });
 
     test('stream with content then an incomplete-as-length error chunk (finish_reason present) keeps responseStatus="success"', async () => {
@@ -743,18 +762,18 @@ describe('handleResponse', () => {
       expect(logger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining('Empty completion (no visible output)')
       );
+      // A truncated-but-useful turn is not an inference error.
+      expect(mockStorage.saveError).not.toHaveBeenCalled();
     });
 
-    test('incomplete stream with ZERO visible output is downgraded to "empty" at flush, not recorded as "error"', async () => {
-      // Locked deliberately: an incomplete-as-length chunk no longer stamps
-      // 'error' (it is a finish, not a failure), so the record still holds
-      // the baseline 'success' when the flush runs — and a stream that
-      // delivered zero visible output to the client is exactly what the
-      // flush's empty-downgrade exists to flag, regardless of WHY it ended.
-      // The truncation detail is not lost: the record's finishReason
-      // ('length'/'content_filter', via usage-logging's raw-mode incomplete
-      // mapping) still says the turn was cut off — 'empty' + that
-      // finishReason together read "truncated before any visible output".
+    test('incomplete stream with ZERO visible output is recorded as an inference error, not "empty"', async () => {
+      // An incomplete-as-length chunk that arrives before ANY visible output
+      // means the upstream never actually answered (it "just stopped
+      // responding") — a provider-side abort, not an ordinary empty turn.
+      // Classifying it 'empty' or leaving it 'success' hides the failure
+      // (no inference error, no capture-on-error trace, performance metrics
+      // treated like a normal turn), so the flush upgrades it to 'error' and
+      // saves an inference error carrying the incomplete reason.
       const fakeTransformer = makeFakeStreamingTransformer();
       registerSpy(TransformerFactory, 'getTransformer').mockReturnValue(fakeTransformer);
 
@@ -804,10 +823,128 @@ describe('handleResponse', () => {
       await drainNodeStream(lastCall[0]);
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      expect(usageRecord.responseStatus).toBe('empty');
+      expect(usageRecord.responseStatus).toBe('error');
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('Empty completion (no visible output)')
+        expect.stringContaining(
+          'Incomplete stream with no visible output (reason=max_output_tokens)'
+        )
       );
+      expect(mockStorage.saveError).toHaveBeenCalledWith(
+        'req-incomplete-empty-stream',
+        expect.any(Error),
+        expect.objectContaining({
+          apiType: 'chat',
+          provider: 'test-provider',
+          code: 'max_output_tokens',
+          clientSignaled: true,
+          incompleteDetails: { reason: 'max_output_tokens' },
+        }),
+        undefined
+      );
+    });
+
+    test('incomplete stream with zero visible output and a content_filter reason records code "content_filter"', async () => {
+      const fakeTransformer = makeFakeStreamingTransformer();
+      registerSpy(TransformerFactory, 'getTransformer').mockReturnValue(fakeTransformer);
+
+      const unifiedResponse: UnifiedChatResponse = {
+        id: 'resp-incomplete-filter-empty-stream',
+        model: 'model-1',
+        content: null,
+        stream: makeRawChunkStream([
+          {
+            id: 'c1',
+            model: 'model-1',
+            event: 'error',
+            delta: {},
+            finish_reason: 'content_filter',
+            incomplete_details: { reason: 'content_filter' },
+            error: {
+              statusCode: 500,
+              code: 'content_filter',
+              message: 'Response ended incomplete: content_filter',
+            },
+          },
+        ]),
+        plexus: {
+          provider: 'test-provider',
+          model: 'model-orig',
+          apiType: 'chat',
+        },
+      };
+
+      const usageRecord: Partial<UsageRecord> = {
+        requestId: 'req-incomplete-filter-empty-stream',
+        canonicalModelName: 'test-alias',
+      };
+
+      await handleResponse(
+        mockRequest,
+        mockReply,
+        unifiedResponse,
+        fakeTransformer,
+        usageRecord,
+        mockStorage,
+        Date.now(),
+        'chat'
+      );
+
+      const lastCall = (mockReply.send as any).mock.calls.at(-1);
+      await drainNodeStream(lastCall[0]);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(usageRecord.responseStatus).toBe('error');
+      expect(mockStorage.saveError).toHaveBeenCalledWith(
+        'req-incomplete-filter-empty-stream',
+        expect.any(Error),
+        expect.objectContaining({ code: 'content_filter', clientSignaled: true }),
+        undefined
+      );
+    });
+
+    test('a genuinely empty completion (clean stop, zero output) still records "empty" and no inference error', async () => {
+      // The incomplete-upgrade must not swallow the plain empty-completion
+      // case: when the stream simply ends with finish_reason 'stop' and no
+      // terminal frame at all, there is nothing to blame the provider for.
+      const fakeTransformer = makeFakeStreamingTransformer();
+      registerSpy(TransformerFactory, 'getTransformer').mockReturnValue(fakeTransformer);
+
+      const unifiedResponse: UnifiedChatResponse = {
+        id: 'resp-plain-empty-stream',
+        model: 'model-1',
+        content: null,
+        stream: makeRawChunkStream([
+          { id: 'c1', model: 'model-1', delta: {}, finish_reason: 'stop' },
+        ]),
+        plexus: {
+          provider: 'test-provider',
+          model: 'model-orig',
+          apiType: 'chat',
+        },
+      };
+
+      const usageRecord: Partial<UsageRecord> = {
+        requestId: 'req-plain-empty-stream',
+        canonicalModelName: 'test-alias',
+      };
+
+      await handleResponse(
+        mockRequest,
+        mockReply,
+        unifiedResponse,
+        fakeTransformer,
+        usageRecord,
+        mockStorage,
+        Date.now(),
+        'chat'
+      );
+
+      const lastCall = (mockReply.send as any).mock.calls.at(-1);
+      await drainNodeStream(lastCall[0]);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(usageRecord.responseStatus).toBe('empty');
+      expect(mockStorage.saveError).not.toHaveBeenCalled();
     });
   });
 });

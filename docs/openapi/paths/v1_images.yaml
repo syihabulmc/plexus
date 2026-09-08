@@ -1,0 +1,36 @@
+post:
+  tags:
+    - Inference — Images
+  summary: OpenRouter-compatible image generation
+  description: |
+    Generates an image from a normalized OpenRouter-style request. Plexus
+    translates the request into the selected provider's native image API and
+    normalizes the response back to the image response contract.
+
+    Buffered generation is supported in this operation. Streaming image
+    events are not currently supported.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas/ImageGenerationRequest.yaml
+        examples:
+          basic:
+            value:
+              model: image-model
+              prompt: A red panda astronaut floating in space.
+              resolution: 2K
+              aspect_ratio: 16:9
+  responses:
+    '200':
+      description: Generated images.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ImageResponse.yaml
+    '400':
+      description: Invalid image request or unsupported target option.
+    '401':
+      description: Authentication required or invalid credentials.
+  operationId: postV1Images

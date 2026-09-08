@@ -16,6 +16,10 @@ import { EnrichedModelTarget } from './selectors/base';
 import { StickySessionManager } from './sticky-session-manager';
 import { getApiBaseType, isApiSubtype, normalizeApiAccessList } from '../../utils/api-format';
 
+function isImageApiType(apiType: string): boolean {
+  return ['chat', 'gemini', 'openai-images', 'openrouter-images'].includes(getApiBaseType(apiType));
+}
+
 export interface RouteResult {
   provider: string;
   model: string;
@@ -195,6 +199,43 @@ async function filterGroupTargets(
     }
   }
 
+  // 3.5. Image capability filter
+  if (incomingApiType === 'images') {
+    const imageTargets = healthyTargets.filter((target) => {
+      const providerConfig = config.providers[target.provider];
+      if (!providerConfig) return false;
+
+      const providerTypes = getProviderTypes(providerConfig);
+      let modelSpecificTypes: ModelProviderConfig['access_via'];
+      let modelType: ModelProviderConfig['type'];
+      if (!Array.isArray(providerConfig.models) && providerConfig.models) {
+        const modelConfig = providerConfig.models[target.model];
+        modelSpecificTypes = modelConfig?.access_via;
+        modelType = modelConfig?.type;
+        if (modelType === 'text' || modelType === 'embeddings') return false;
+      }
+
+      const availableTypes =
+        modelSpecificTypes && modelSpecificTypes.length > 0
+          ? normalizeApiAccessList(modelSpecificTypes)
+          : providerTypes;
+      const supportsImageProtocol = availableTypes.some((type) => isImageApiType(type));
+
+      return supportsImageProtocol;
+    });
+
+    if (imageTargets.length > 0) {
+      if (logModelName) {
+        logger.info(
+          `Router: Filtered to ${imageTargets.length} image-compatible targets (from ${healthyTargets.length} total).`
+        );
+      }
+    } else if (logModelName) {
+      logger.warn(`Router: No image-compatible targets found for '${logModelName}'.`);
+    }
+    healthyTargets = imageTargets;
+  }
+
   const findApiCompatibleTargets = (
     targets: (ModelTarget & { provider: string; model: string })[],
     requestedApiType: string
@@ -206,14 +247,24 @@ async function filterGroupTargets(
 
       const providerTypes = getProviderTypes(providerConfig);
       let modelSpecificTypes: ModelProviderConfig['access_via'];
+      let modelType: ModelProviderConfig['type'];
       if (!Array.isArray(providerConfig.models) && providerConfig.models) {
-        modelSpecificTypes = providerConfig.models[target.model]?.access_via;
+        const modelConfig = providerConfig.models[target.model];
+        modelSpecificTypes = modelConfig?.access_via;
+        modelType = modelConfig?.type;
+      }
+      if (normalizedIncoming === 'images' && (modelType === 'text' || modelType === 'embeddings')) {
+        return false;
       }
       const availableTypes =
         modelSpecificTypes && modelSpecificTypes.length > 0
           ? normalizeApiAccessList(modelSpecificTypes)
           : providerTypes;
-      return availableTypes.some((t) => t.toLowerCase() === normalizedIncoming);
+      return availableTypes.some(
+        (t) =>
+          t.toLowerCase() === normalizedIncoming ||
+          (normalizedIncoming === 'images' && isImageApiType(t))
+      );
     });
   };
 

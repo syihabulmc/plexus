@@ -377,6 +377,8 @@ paths:
     $ref: paths/v1_audio_transcriptions.yaml
   /v1/audio/speech:
     $ref: paths/v1_audio_speech.yaml
+  /v1/images:
+    $ref: paths/v1_images.yaml
   /v1/images/generations:
     $ref: paths/v1_images_generations.yaml
   /v1/images/edits:

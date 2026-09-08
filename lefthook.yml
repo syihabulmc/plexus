@@ -1,3 +1,9 @@
+colors: false
+
+output:
+  - summary
+  - failure
+
 pre-commit:
   # Skip the entire hook in CI — GitHub Actions runs each check independently
   # in dedicated workflow steps, making the hook redundant and harmful
@@ -68,31 +74,3 @@ pre-commit:
     backend-tests:
       glob: "packages/backend/src/**"
       run: bun run test
-
-    # --- Cora: local AI review on staged diffs (skipped if not installed) ----
-    cora-review:
-      skip:
-        - CI: "true"
-      run: |
-        if [ "${SKIP_CORA:-0}" = "1" ]; then exit 0; fi
-        if command -v cora >/dev/null 2>&1; then
-          cora review --staged --severity major
-        elif command -v mise >/dev/null 2>&1 && mise which cora >/dev/null 2>&1; then
-          mise exec -- cora review --staged --severity major
-        else
-          exit 0
-        fi
-
-pre-push:
-  # Local review hook placeholder — also skipped in CI.
-  skip:
-    - CI: "true"
-
-  # Scripts avoid Lefthook's @{push}-based file heuristic, which can skip
-  # commands for upstream-less branches and worktrees.
-  scripts:
-    "pr-agent-review.sh":
-      runner: bash
-      skip:
-        - CI: "true"
-      use_stdin: true # forwards git's pre-push ref lines to the script

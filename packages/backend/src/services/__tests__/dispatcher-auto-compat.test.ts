@@ -223,6 +223,340 @@ describe('Dispatcher registry auto-compat', () => {
 
     expect(result.payload.reasoning_effort).toBe('low');
   });
+
+  test('translates a client-sent reasoning object to reasoning_effort on the default format', async () => {
+    // Strict OpenAI-compatible upstreams (e.g. the Meta Model API) hard-400 on
+    // the Responses-style `reasoning` object; the projection must emit ONLY the
+    // translated `reasoning_effort` and strip the leftover object.
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: { effort: 'high' },
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toBeUndefined();
+    expect(result.payload.reasoning_effort).toBe('high');
+  });
+
+  test('openrouter format emits the reasoning object and strips stale reasoning_effort', async () => {
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({ compat: { supportsReasoningEffort: true, thinkingFormat: 'openrouter' } })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning_effort: 'medium',
+        },
+      }),
+      route({ provider: 'openrouter' }),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toEqual({ effort: 'medium' });
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
+
+  test('qwen format translates to enable_thinking and strips both OpenAI-style notations', async () => {
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({ compat: { supportsReasoningEffort: true, thinkingFormat: 'qwen' } })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: { effort: 'low' },
+          reasoning_effort: 'low',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.enable_thinking).toBe(true);
+    expect(result.payload.reasoning).toBeUndefined();
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
+
+  test('strips stale reasoning_effort when the dialect cannot express it (zai)', async () => {
+    // zai with supportsReasoningEffort=false: the intent lands on `thinking`
+    // alone, and the client's untranslated `reasoning_effort` must be REMOVED
+    // — leaving it would resend an unsupported field to the strict upstream.
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({ compat: { supportsReasoningEffort: false, thinkingFormat: 'zai' } })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning_effort: 'medium',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.thinking).toEqual({ type: 'enabled', clear_thinking: false });
+    expect(result.payload.reasoning_effort).toBeUndefined();
+    expect(result.payload.reasoning).toBeUndefined();
+  });
+
+  test('ant-ling drops the unified reasoning notation when the intent is a disable it cannot express', async () => {
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({ compat: { supportsReasoningEffort: true, thinkingFormat: 'ant-ling' } })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: { enabled: false },
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toBeUndefined();
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
+
+  test('ant-ling emits its own reasoning object and strips reasoning_effort when enabled', async () => {
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({ compat: { supportsReasoningEffort: true, thinkingFormat: 'ant-ling' } })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning_effort: 'high',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toEqual({ effort: 'high' });
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
+
+  test('default format passes the client reasoning_effort through when support is unknown', async () => {
+    // compat.supportsReasoningEffort is undefined (unknown, not false): the
+    // default dialect natively speaks reasoning_effort, so an untranslatable
+    // client value passes through instead of being silently dropped.
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({
+        thinkingLevelMap: {},
+        compat: {},
+      })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning_effort: 'medium',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning_effort).toBe('medium');
+    expect(result.payload.reasoning).toBeUndefined();
+  });
+
+  test('default format strips reasoning_effort when the dialect provably lacks support', async () => {
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(
+      piModel({
+        thinkingLevelMap: {},
+        compat: { supportsReasoningEffort: false },
+      })
+    );
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning_effort: 'medium',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning_effort).toBeUndefined();
+    expect(result.payload.reasoning).toBeUndefined();
+  });
+
+  test('default format drops stale reasoning_effort that contradicts a recognized reasoning object', async () => {
+    // Client sent BOTH fields with conflicting values: reasoning.enabled=false
+    // is authoritative (checked before reasoning_effort), so after deleting the
+    // reasoning object the surviving 'high' effort would reverse the intent.
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(piModel({ compat: {} }));
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: { enabled: false },
+          reasoning_effort: 'high',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toBeUndefined();
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
+
+  test('default format drops stale reasoning_effort when null reasoning falls back to request intent', async () => {
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(piModel({ compat: {} }));
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        reasoning: { enabled: false },
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: null,
+          reasoning_effort: 'high',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toBeUndefined();
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
+
+  test('default format ignores a malformed non-object reasoning value as intent source', async () => {
+    // A string `reasoning` is not a recognized intent source for the
+    // extractor, so reasoning_effort remains the authoritative intent and
+    // passes through when provider support is unknown. (The malformed field
+    // itself still goes upstream on this path; the reactive strip-and-retry
+    // is the guard against a strict upstream rejecting it.)
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(piModel({ compat: {} }));
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: 'high', // malformed — extractor skips non-objects
+          reasoning_effort: 'medium',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning_effort).toBe('medium');
+  });
+
+  test('array-valued reasoning is not a recognized intent source', async () => {
+    // `typeof [] === 'object'` would otherwise mark this as an authoritative
+    // reasoning object; array values must pass through the same way as other
+    // malformed values without making a valid reasoning_effort look stale.
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(piModel({ compat: {} }));
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: [],
+          reasoning_effort: 'medium',
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning_effort).toBe('medium');
+  });
+
+  test('leaves untranslated reasoning fields untouched when no intent is recognized', async () => {
+    // With model.reasoning disabled there is nothing to translate — the
+    // projection is a no-op passthrough and must NOT strip the field (it may
+    // be handled by the reactive unsupported-param strip-and-retry instead).
+    vi.mocked(piAiRegistry.resolvePiAiModel).mockReturnValue(piModel({ reasoning: false }));
+    const dispatcher = new Dispatcher() as any;
+
+    const result = await dispatcher.transformRequestPayload(
+      request({
+        originalBody: {
+          model: 'alias-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          reasoning: { effort: 'high' },
+        },
+      }),
+      route(),
+      { transformRequest: vi.fn() },
+      'chat',
+      []
+    );
+
+    expect(result.payload.reasoning).toEqual({ effort: 'high' });
+    expect(result.payload.reasoning_effort).toBeUndefined();
+  });
 });
 
 describe('matchUnsupportedParameter', () => {
@@ -263,6 +597,14 @@ describe('matchUnsupportedParameter', () => {
         '{"error":{"message":"Unsupported parameter: \'messages[0].name\'"}}'
       )
     ).toBe('messages.0.name');
+  });
+
+  test('extracts a backtick-quoted param name (Meta Model API error shape)', () => {
+    expect(
+      matchUnsupportedParameter(
+        '{"error":{"code":null,"message":"unknown parameter `reasoning`","param":"reasoning","type":"invalid_request_error"}}'
+      )
+    ).toBe('reasoning');
   });
 
   test('returns undefined when the body does not name an unsupported parameter', () => {

@@ -13,7 +13,7 @@ const API_TYPE_ALIASES: Record<string, string[]> = {
   embeddings: ['chat', 'gemini'],
   transcriptions: ['chat', 'gemini'],
   speech: ['chat', 'gemini'],
-  images: ['chat', 'gemini'],
+  'openai-images': ['chat', 'gemini'],
 };
 
 function stripTrailingApiVersion(url: string): string {
@@ -58,7 +58,12 @@ export function selectTargetApiType(
   if (incomingApiType) {
     const incoming = incomingApiType.toLowerCase();
     // Case-insensitive match
-    const match = availableTypes.find((t: string) => t.toLowerCase() === incoming);
+    const match = availableTypes.find(
+      (t: string) =>
+        t.toLowerCase() === incoming ||
+        (incoming === 'images' &&
+          ['chat', 'gemini', 'openai-images', 'openrouter-images'].includes(getApiBaseType(t)))
+    );
     if (match) {
       targetApiType = match;
       selectionReason = `matched incoming request type '${incoming}'`;
@@ -91,11 +96,30 @@ export function selectTargetApiType(
  * Resolves the provider base URL from configuration, handling both string and record formats
  * @returns Normalized base URL without trailing slash
  */
+export function resolveImageProviderBaseUrl(route: RouteResult, targetApiType: string): string {
+  if (!route.config.api_base_url || typeof route.config.api_base_url === 'string') {
+    return resolveProviderBaseUrl(route, targetApiType);
+  }
+
+  const urlMap = route.config.api_base_url as Record<string, string>;
+  const isOpenAiCompatibleTarget = ['chat', 'completions', 'openai'].includes(
+    getApiBaseType(targetApiType)
+  );
+
+  if (isOpenAiCompatibleTarget && urlMap['openai-images']) {
+    return resolveProviderBaseUrl(route, 'openai-images');
+  }
+  return resolveProviderBaseUrl(route, targetApiType);
+}
+
 export function resolveProviderBaseUrl(route: RouteResult, targetApiType: string): string {
   let rawBaseUrl: string;
 
-  if (typeof route.config.api_base_url === 'string') {
-    rawBaseUrl = route.config.api_base_url;
+  if (!route.config.api_base_url || typeof route.config.api_base_url === 'string') {
+    rawBaseUrl = route.config.api_base_url || '';
+    if (!rawBaseUrl) {
+      throw new Error(`No base URL configured for api type '${targetApiType}'.`);
+    }
   } else {
     // It's a record/map
     const urlMap = route.config.api_base_url;

@@ -301,6 +301,30 @@ export async function handleResponse(
       // otherwise `unifiedStream === rawStream` (raw bytes) and there is
       // nothing chunk-shaped to inspect.
       const visibilityTracker = createStreamVisibilityTracker();
+      // "Ended incomplete" outcome seen on the unified error channel
+      // (response.incomplete → finish_reason 'length'/'content_filter'), if
+      // one passed through. Tracked separately so flush() can tell an
+      // upstream-aborted empty turn apart from an ordinary empty completion.
+      let terminalIncomplete: { reason: string; message: string } | null = null;
+      const saveTerminalError = (code: string, message: string, details: object) => {
+        usageStorage.saveError(
+          usageRecord.requestId!,
+          new Error(message),
+          {
+            apiType,
+            provider: usageRecord.provider,
+            targetModel: usageRecord.selectedModelName,
+            statusCode: 500,
+            code,
+            // The terminal frame is relayed to the client as-is (we never
+            // suppress the upstream's response.failed/response.incomplete
+            // event), so the client does see an explicit terminal signal.
+            clientSignaled: true,
+            ...details,
+          },
+          keyName
+        );
+      };
       const observedUnifiedStream = providerTransformer.transformStream
         ? unifiedStream.pipeThrough(
             new TransformStream({
@@ -311,40 +335,74 @@ export async function handleResponse(
                 // transformStream renders it) means the completion did not
                 // finish cleanly. Mark the usage record accordingly (once)
                 // so it's never reported as a plain success, nor — via the
-                // flush's empty-downgrade below, which only ever upgrades a
-                // 'success' into 'empty' — silently reclassified as merely
-                // "empty" once the stream ends. Error chunks that DO carry
-                // a finish_reason are "ended incomplete" outcomes
-                // (response.incomplete → 'length'/'content_filter'): they
-                // ride the unified error channel for routing but are
-                // rendered as a normal finish for chat clients (and as
-                // response.incomplete for Responses clients) — a
-                // successful-if-truncated turn, not an error — so they keep
-                // 'success' (or, when the truncation left zero visible
-                // output, the flush's 'empty' downgrade below).
-                if (
-                  chunk?.event === 'error' &&
-                  !chunk.finish_reason &&
-                  usageRecord.responseStatus !== 'error'
-                ) {
-                  usageRecord.responseStatus = 'error';
+                // flush's empty-downgrade below, which only ever touches a
+                // plain 'success' — silently reclassified as merely
+                // "empty" once the stream ends, and record an inference error
+                // so the failure surfaces in the errors log (headers are
+                // already sent, so the client-visible stream is unaffected).
+                if (chunk?.event === 'error') {
+                  if (!chunk.finish_reason) {
+                    if (usageRecord.responseStatus !== 'error') {
+                      usageRecord.responseStatus = 'error';
+                      saveTerminalError(
+                        chunk.error?.code ?? 'response_failed',
+                        chunk.error?.message ?? 'The model response failed to complete.',
+                        {}
+                      );
+                    }
+                  } else if (!terminalIncomplete) {
+                    // Error chunks that DO carry a finish_reason are "ended
+                    // incomplete" outcomes (response.incomplete →
+                    // 'length'/'content_filter'): they ride the unified error
+                    // channel for routing but are rendered as a normal finish
+                    // for chat clients (and as response.incomplete for
+                    // Responses clients) — a successful-if-truncated turn,
+                    // not an error — UNLESS the stream produced no visible
+                    // output at all, in which case flush() classifies it as
+                    // an inference error (the upstream effectively never
+                    // answered; recording it as success/"empty" hides a
+                    // provider-side abort).
+                    terminalIncomplete = {
+                      reason: chunk.incomplete_details?.reason ?? chunk.error?.code ?? 'unknown',
+                      message:
+                        chunk.error?.message ?? `Response ended incomplete: ${chunk.finish_reason}`,
+                    };
+                  }
                 }
                 controller.enqueue(chunk);
               },
               flush() {
-                // Only ever downgrade a plain 'success' into 'empty' — never
-                // clobber a more specific status (e.g. 'error', set above
-                // when a unified error chunk passed through, or 'error' from
-                // the Gemini MALFORMED_FUNCTION_CALL tap above) that may have
-                // already been set while this stream was flowing.
+                // Only ever touch a plain 'success' — never clobber a more
+                // specific status (e.g. 'error', set above when a hard-
+                // failure chunk passed through, or from the Gemini
+                // MALFORMED_FUNCTION_CALL tap above) that may have already
+                // been set while this stream was flowing.
                 if (isStreamEmpty(visibilityTracker) && usageRecord.responseStatus === 'success') {
-                  usageRecord.responseStatus = 'empty';
-                  logger.warn(
-                    `Empty completion (no visible output) streamed to client for ` +
-                      `${usageRecord.provider ?? 'unknown'}/${usageRecord.selectedModelName ?? 'unknown'} ` +
-                      `(alias=${usageRecord.canonicalModelName ?? usageRecord.incomingModelAlias ?? 'n/a'}, ` +
-                      `requestId=${usageRecord.requestId})`
-                  );
+                  if (terminalIncomplete) {
+                    // Upstream ended the response incomplete before producing
+                    // ANY visible output — i.e. it "just stopped responding".
+                    // That is a provider-side failure, not an empty turn:
+                    // classify it as an error and save an inference error so
+                    // it surfaces instead of being silently swallowed.
+                    usageRecord.responseStatus = 'error';
+                    logger.warn(
+                      `Incomplete stream with no visible output (reason=${terminalIncomplete.reason}) ` +
+                        `for ${usageRecord.provider ?? 'unknown'}/${usageRecord.selectedModelName ?? 'unknown'} ` +
+                        `(alias=${usageRecord.canonicalModelName ?? usageRecord.incomingModelAlias ?? 'n/a'}, ` +
+                        `requestId=${usageRecord.requestId}) — recorded as inference error`
+                    );
+                    saveTerminalError(terminalIncomplete.reason, terminalIncomplete.message, {
+                      incompleteDetails: { reason: terminalIncomplete.reason },
+                    });
+                  } else {
+                    usageRecord.responseStatus = 'empty';
+                    logger.warn(
+                      `Empty completion (no visible output) streamed to client for ` +
+                        `${usageRecord.provider ?? 'unknown'}/${usageRecord.selectedModelName ?? 'unknown'} ` +
+                        `(alias=${usageRecord.canonicalModelName ?? usageRecord.incomingModelAlias ?? 'n/a'}, ` +
+                        `requestId=${usageRecord.requestId})`
+                    );
+                  }
                 }
               },
             })

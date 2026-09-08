@@ -101,6 +101,7 @@ export class OpenAITransformer implements Transformer {
                 name: fn.name,
                 description: fn.description,
                 parameters,
+                ...(fn.strict !== undefined ? { strict: fn.strict } : {}),
               },
             };
           })

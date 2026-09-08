@@ -2,6 +2,7 @@ type: object
 properties:
   created:
     type: integer
+    description: Unix timestamp when the images were generated.
   data:
     type: array
     items:
@@ -13,8 +14,21 @@ properties:
           format: uri
         b64_json:
           type: string
+        media_type:
+          type: string
         revised_prompt:
           type: string
+  usage:
+    type: object
+    properties:
+      prompt_tokens:
+        type: integer
+      completion_tokens:
+        type: integer
+      total_tokens:
+        type: integer
+      cost:
+        type: number
 required:
   - created
   - data

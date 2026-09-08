@@ -16,7 +16,109 @@ import { CooldownManager } from '../runtime/cooldown-manager';
 import { ConcurrencyTracker } from '../runtime/concurrency-tracker';
 import { DebugManager } from '../observability/debug-manager';
 import { EmbeddingsTransformerFactory } from './embeddings-transformer-factory';
+import { ImageGenerationTransformerFactory } from './image-transformer-factory';
+import {
+  resolveImageProviderBaseUrl,
+  selectTargetApiType,
+} from '../providers/provider-api-selection';
 import type { RetryAttemptRecord } from './dispatcher-types';
+
+function imageRoutingError(message: string): Error {
+  const error = new Error(message) as any;
+  error.routingContext = { statusCode: 400, code: 'invalid_request_error' };
+  return error;
+}
+
+function applyImageProviderPreferences(
+  candidates: RouteResult[],
+  request: UnifiedImageGenerationRequest
+): RouteResult[] {
+  const preferences = request.provider;
+  if (!preferences) return candidates;
+
+  if (preferences.sort !== undefined) {
+    throw imageRoutingError('provider.sort is not supported for image routing');
+  }
+
+  const ignored = new Set(preferences.ignore ?? []);
+  let eligible = candidates.filter((candidate) => !ignored.has(candidate.provider));
+
+  if (preferences.only && preferences.only.length > 0) {
+    const allowed = new Set(preferences.only);
+    eligible = eligible.filter((candidate) => allowed.has(candidate.provider));
+    if (eligible.length === 0) {
+      throw imageRoutingError('provider.only did not match any configured image target');
+    }
+  }
+
+  if (preferences.order && preferences.order.length > 0) {
+    const order = new Map(preferences.order.map((provider, index) => [provider, index]));
+    eligible = eligible
+      .map((candidate, index) => ({
+        candidate,
+        index,
+        rank: order.get(candidate.provider) ?? Number.MAX_SAFE_INTEGER,
+      }))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map(({ candidate }) => candidate);
+  }
+
+  if (eligible.length === 0) {
+    throw imageRoutingError('Image provider preferences excluded every configured target');
+  }
+  return eligible;
+}
+
+function mergeImagePayload(payload: any, extraBody: Record<string, any> | undefined): any {
+  if (!extraBody) return payload;
+  if (!(payload instanceof FormData)) return { ...payload, ...extraBody };
+
+  for (const [key, value] of Object.entries(extraBody)) {
+    if (value === undefined || value === null) continue;
+    payload.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+  }
+  return payload;
+}
+
+const RESERVED_IMAGE_PROVIDER_OPTION_KEYS = new Set([
+  'model',
+  'prompt',
+  'n',
+  'resolution',
+  'aspect_ratio',
+  'size',
+  'quality',
+  'output_format',
+  'background',
+  'output_compression',
+  'seed',
+  'input_references',
+  'image',
+  'mask',
+  'response_format',
+  'stream',
+  'provider',
+  'headers',
+  'authorization',
+  'api_key',
+  'base_url',
+  'endpoint',
+]);
+
+function providerImageOptions(
+  request: UnifiedImageGenerationRequest,
+  provider: string
+): Record<string, any> | undefined {
+  const options = request.provider?.options;
+  if (!options || typeof options !== 'object' || Array.isArray(options)) return undefined;
+  const scoped = options[provider];
+  if (!scoped || typeof scoped !== 'object' || Array.isArray(scoped)) return undefined;
+
+  const sanitized = Object.fromEntries(
+    Object.entries(scoped).filter(([key]) => !RESERVED_IMAGE_PROVIDER_OPTION_KEYS.has(key))
+  );
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
 
 interface MediaDispatchHost {
   resolveBaseUrl(route: RouteResult, apiType: string): string;
@@ -867,8 +969,6 @@ export class MediaDispatcher {
     request: UnifiedImageGenerationRequest
   ): Promise<UnifiedImageGenerationResponse> {
     const host = this.host;
-    const { ImageTransformer } = await import('../../transformers/image');
-    const transformer = new ImageTransformer();
 
     const config = getConfig();
     const failover = config.failover;
@@ -881,11 +981,13 @@ export class MediaDispatcher {
     }
 
     candidates = applyKeyAccessPolicy(request, candidates, 'images');
+    candidates = applyImageProviderPreferences(candidates, request);
 
     const retryHistory: RetryAttemptRecord[] = [];
     candidates = host.applyQuotaFilter(request, candidates, retryHistory, 'images');
 
-    const targets = failoverEnabled ? candidates : [candidates[0]!];
+    const requestAllowsFallbacks = request.provider?.allow_fallbacks !== false;
+    const targets = failoverEnabled && requestAllowsFallbacks ? candidates : [candidates[0]!];
     const attemptedProviders: string[] = [];
     let lastError: any = null;
 
@@ -938,46 +1040,42 @@ export class MediaDispatcher {
       host.emitRoutingUpdate(request.requestId, route);
 
       try {
-        const baseUrl = host.resolveBaseUrl(route, 'images');
-        const url = `${baseUrl}/images/generations`;
+        const targetApiType = selectTargetApiType(route, 'images').targetApiType || 'chat';
+        const transformer = ImageGenerationTransformerFactory.resolveTransformer(targetApiType);
+        const requestWithModel = { ...request, model: route.model };
+        const baseUrl = resolveImageProviderBaseUrl(route, targetApiType);
+        const url = `${baseUrl}${transformer.getEndpoint(requestWithModel)}`;
 
         const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
           Accept: 'application/json',
         };
 
         if (route.config.api_key) {
-          headers['Authorization'] = `Bearer ${route.config.api_key}`;
+          if (transformer.getAuthHeaders) {
+            transformer.getAuthHeaders(route.config.api_key, headers);
+          } else {
+            headers['Authorization'] = `Bearer ${route.config.api_key}`;
+          }
         }
 
         if (route.config.headers) {
           Object.assign(headers, route.config.headers);
         }
 
-        const payload = await transformer.transformGenerationRequest({
-          ...request,
-          model: route.model,
-        });
+        let payload = await transformer.transformGenerationRequest(requestWithModel);
+        payload = mergeImagePayload(payload, route.config.extraBody);
+        payload = mergeImagePayload(payload, route.modelConfig?.extraBody);
 
-        if (route.config.extraBody) {
-          Object.assign(payload, route.config.extraBody);
-        }
-
-        // Merge model-level extraBody (overrides provider level)
-        if (route.modelConfig?.extraBody) {
-          Object.assign(payload, route.modelConfig.extraBody);
-        }
-
-        // Merge alias-level extraBody (overrides provider level)
         if (route.canonicalModel) {
           const aliasConfig = getConfig().models?.[route.canonicalModel];
-          if (aliasConfig?.extraBody) {
-            Object.assign(payload, aliasConfig.extraBody);
-          }
+          payload = mergeImagePayload(payload, aliasConfig?.extraBody);
         }
+        payload = mergeImagePayload(payload, providerImageOptions(request, route.provider));
+
+        if (!(payload instanceof FormData)) headers['Content-Type'] = 'application/json';
 
         logger.info(
-          `Dispatching image generation ${request.model} to ${route.provider}:${route.model}`
+          `Dispatching image generation ${request.model} to ${route.provider}:${route.model} via ${targetApiType}`
         );
         logger.silly('Image Generation Request Payload', payload);
 
@@ -988,7 +1086,7 @@ export class MediaDispatcher {
         const response = await fetch(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify(payload),
+          body: payload instanceof FormData ? payload : JSON.stringify(payload),
         });
 
         // Capture response metadata for debug logging
@@ -1048,12 +1146,16 @@ export class MediaDispatcher {
           DebugManager.getInstance().addRawResponse(request.requestId, responseBody);
         }
 
-        const unifiedResponse = await transformer.transformGenerationResponse(responseBody);
+        const unifiedResponse = await transformer.transformGenerationResponse(
+          responseBody,
+          requestWithModel
+        );
 
         unifiedResponse.plexus = {
           provider: route.provider,
           model: route.model,
           apiType: 'images',
+          targetApiType,
           pricing: route.modelConfig?.pricing,
           providerDiscount: route.config.discount,
           canonicalModel: route.canonicalModel,
@@ -1186,7 +1288,7 @@ export class MediaDispatcher {
       host.emitRoutingUpdate(request.requestId, route);
 
       try {
-        const baseUrl = host.resolveBaseUrl(route, 'images');
+        const baseUrl = resolveImageProviderBaseUrl(route, 'openai-images');
         const url = `${baseUrl}/images/edits`;
 
         const headers: Record<string, string> = {};

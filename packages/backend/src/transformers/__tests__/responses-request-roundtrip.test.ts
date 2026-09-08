@@ -655,3 +655,50 @@ describe('transformRequest stream-field hygiene (no phantom `stream: undefined`)
     expect(built.stream).toBe(false);
   });
 });
+
+describe('transformRequest tool strict-field hygiene', () => {
+  const MINIMAL_REQUEST = {
+    model: 'gpt-4o',
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Hello' }],
+      },
+    ],
+  };
+
+  const functionTool = (strict?: boolean) => ({
+    type: 'function',
+    name: 'get_weather',
+    description: 'Get the weather',
+    parameters: { type: 'object', properties: { city: { type: 'string' } } },
+    ...(strict !== undefined ? { strict } : {}),
+  });
+
+  it('preserves an explicit strict:false in Responses and Chat payloads', async () => {
+    const unified = await new ResponsesTransformer().parseRequest({
+      ...MINIMAL_REQUEST,
+      tools: [functionTool(false)],
+    });
+
+    const responsesPayload = await new ResponsesTransformer().transformRequest(unified);
+    const chatPayload = await new OpenAITransformer().transformRequest(unified);
+
+    expect(responsesPayload.tools[0].strict).toBe(false);
+    expect(chatPayload.tools[0].function.strict).toBe(false);
+  });
+
+  it('does not add strict when the client omits it', async () => {
+    const unified = await new ResponsesTransformer().parseRequest({
+      ...MINIMAL_REQUEST,
+      tools: [functionTool()],
+    });
+
+    const responsesPayload = await new ResponsesTransformer().transformRequest(unified);
+    const chatPayload = await new OpenAITransformer().transformRequest(unified);
+
+    expect(Object.hasOwn(responsesPayload.tools[0], 'strict')).toBe(false);
+    expect(Object.hasOwn(chatPayload.tools[0].function, 'strict')).toBe(false);
+  });
+});

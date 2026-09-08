@@ -1,0 +1,24 @@
+profile: clean-code
+
+llm:
+  temperature: 0
+  max_tokens: 4096
+  timeout: 600
+  cache_ttl: 1440
+
+review:
+  sanitize_comments: true
+  context_chain:
+    enabled: true
+    max_context_tokens: 5000
+    follow_depth: 1
+    include_tests: true
+    include_callers: true
+    use_brain: true
+    impact_depth: 2
+    prefer_index: true
+
+focus:
+  - security
+  - bugs
+  - maintainability

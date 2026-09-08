@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { logger } from '../../utils/logger';
 import { Dispatcher } from '../../services/dispatch/dispatcher';
 import { ImageTransformer } from '../../transformers';
+import { formatOpenRouterImageResponse } from '../../transformers/image';
 import { UsageStorageService } from '../../services/observability/usage-storage';
 import { UsageRecord } from '../../types/usage';
 import { getClientIp } from '../../utils/ip';
@@ -22,7 +23,7 @@ export async function registerImagesRoute(
    * OpenAI Compatible Image Generation Endpoint.
    * Accepts JSON body with prompt, model, and image generation parameters.
    */
-  fastify.post('/v1/images/generations', async (request, reply) => {
+  const imageGenerationHandler = async (request: any, reply: any) => {
     const requestId = crypto.randomUUID();
     const clientRequestId = getClientRequestId(request.headers);
     reply.header('x-request-id', requestId);
@@ -44,7 +45,8 @@ export async function registerImagesRoute(
     usageStorage.emitStartedAsync(usageRecord);
 
     try {
-      const body = request.body as any;
+      const body = (request.body ?? {}) as any;
+      const isOpenRouterImageRoute = request.url?.split('?')[0] === '/v1/images';
 
       usageRecord.incomingModelAlias = body.model;
       usageRecord.apiKey = (request as any).keyName;
@@ -62,19 +64,26 @@ export async function registerImagesRoute(
 
       const transformer = new ImageTransformer();
 
-      let unifiedRequest: UnifiedImageGenerationRequest = {
-        model: body.model,
-        prompt: body.prompt,
-        n: body.n,
-        size: body.size,
-        response_format: body.response_format,
-        quality: body.quality,
-        style: body.style,
-        user: body.user,
-        requestId,
-        incomingApiType: 'images',
-        originalBody: body,
-      };
+      let unifiedRequest: UnifiedImageGenerationRequest = isOpenRouterImageRoute
+        ? await transformer.parseOpenRouterGenerationRequest({
+            ...body,
+            requestId,
+            incomingApiType: 'images',
+            originalBody: body,
+          })
+        : {
+            model: body.model,
+            prompt: body.prompt,
+            n: body.n,
+            size: body.size,
+            response_format: body.response_format,
+            quality: body.quality,
+            style: body.style,
+            user: body.user,
+            requestId,
+            incomingApiType: 'images',
+            originalBody: body,
+          };
       unifiedRequest = attachKeyAccessPolicy(request, unifiedRequest);
 
       DebugManager.getInstance().startLog(
@@ -86,6 +95,9 @@ export async function registerImagesRoute(
       );
 
       const unifiedResponse = await dispatcher.dispatchImageGenerations(unifiedRequest);
+      const clientResponse = isOpenRouterImageRoute
+        ? await formatOpenRouterImageResponse(unifiedResponse)
+        : unifiedResponse;
 
       // Emit 'updated' event with routing decision details
       usageStorage.emitUpdatedAsync({
@@ -99,7 +111,12 @@ export async function registerImagesRoute(
       usageRecord.selectedModelName = unifiedResponse.plexus?.model;
       usageRecord.canonicalModelName = unifiedResponse.plexus?.canonicalModel;
       usageRecord.outgoingApiType = unifiedResponse.plexus?.apiType;
-      usageRecord.isPassthrough = true;
+      usageRecord.isPassthrough = !isOpenRouterImageRoute;
+      usageRecord.tokensInput =
+        unifiedResponse.usage?.input_tokens ?? unifiedResponse.usage?.prompt_tokens ?? null;
+      usageRecord.tokensOutput =
+        unifiedResponse.usage?.output_tokens ?? unifiedResponse.usage?.completion_tokens ?? null;
+      usageRecord.providerReportedCost = unifiedResponse.usage?.cost ?? null;
       usageRecord.durationMs = Date.now() - startTime;
       usageRecord.responseStatus = 'success';
 
@@ -123,7 +140,7 @@ export async function registerImagesRoute(
         delete (unifiedResponse as any).plexus;
       }
 
-      return reply.send(unifiedResponse);
+      return reply.send(clientResponse);
     } catch (e: any) {
       usageRecord.responseStatus = 'error';
       usageRecord.durationMs = Date.now() - startTime;
@@ -140,11 +157,19 @@ export async function registerImagesRoute(
       DebugManager.getInstance().flush(requestId);
       logger.error('Error processing image generation request', e);
 
-      return reply.code(e.routingContext?.statusCode || 500).send({
-        error: { message: e.message, type: 'api_error' },
+      const statusCode = e.routingContext?.statusCode || 500;
+      return reply.code(statusCode).send({
+        error: {
+          message: e.message,
+          type:
+            e.routingContext?.code || (statusCode === 400 ? 'invalid_request_error' : 'api_error'),
+        },
       });
     }
-  });
+  };
+
+  fastify.post('/v1/images', imageGenerationHandler);
+  fastify.post('/v1/images/generations', imageGenerationHandler);
 
   /**
    * POST /v1/images/edits

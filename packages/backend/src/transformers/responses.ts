@@ -374,11 +374,13 @@ export class ResponsesTransformer implements Transformer {
     // the HTTP call is made.
     const tools = request.tools?.map((tool: any) => {
       if (tool.type !== 'function' || !tool.function) return tool;
+      const strict = tool.function?.strict;
       return {
         type: 'function',
         name: tool.function?.name ?? '',
         description: tool.function?.description ?? '',
         parameters: tool.function?.parameters ?? {},
+        ...(strict !== undefined ? { strict } : {}),
       };
     });
 

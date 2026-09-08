@@ -76,6 +76,10 @@
     "sync:openapi:types": "bun run bundle:openapi && bunx openapi-typescript docs/openapi.yaml -o scripts/openapi-types.ts",
     "generate-migrations": "bun run scripts/generate-migrations.ts",
     "review": "bash .lefthook/pre-push/pr-agent-review.sh --manual",
+    "code:review:staged": "cora review --staged --severity major",
+    "code:review:unstaged": "cora review --unstaged --severity major",
+    "code:review:branch": "cora review --base origin/main --severity major",
+    "code:review:commit": "cora review --commit HEAD --severity major",
     "deploy:staging": "bun run scripts/deploy-staging.ts"
   },
   "type": "module",
