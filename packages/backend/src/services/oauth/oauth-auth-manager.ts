@@ -55,8 +55,12 @@ function waitForPromise<T>(promise: Promise<T>, signal: AbortSignal): Promise<T>
   });
 }
 
-interface GetApiKeyOptions {
+export const DEFAULT_OAUTH_EXPIRY_BUFFER_MS = 60 * 1000;
+
+export interface GetApiKeyOptions {
   refreshIfOlderThanMs?: number;
+  refreshIfExpiringWithinMs?: number;
+  forceRefresh?: boolean;
   signal?: AbortSignal;
 }
 
@@ -254,8 +258,14 @@ export class OAuthAuthManager {
     const now = Date.now();
     let current = credentials;
     const lastRefresh = this.lastRefreshAt.get(refreshKey);
+    const expiryBufferMs =
+      options.refreshIfExpiringWithinMs !== undefined
+        ? Math.max(0, options.refreshIfExpiringWithinMs)
+        : DEFAULT_OAUTH_EXPIRY_BUFFER_MS;
+    const isExpiredOrExpiring = current.expires - expiryBufferMs <= now;
     const refreshRequested =
-      current.expires <= now ||
+      options.forceRefresh === true ||
+      isExpiredOrExpiring ||
       (options.refreshIfOlderThanMs !== undefined &&
         (lastRefresh === undefined || now - lastRefresh >= options.refreshIfOlderThanMs));
 
@@ -263,7 +273,7 @@ export class OAuthAuthManager {
       const signal = options.signal ?? new AbortController().signal;
       const backoff = this.refreshBackoffs.get(refreshKey);
       if (backoff && backoff.retryAt > now) {
-        if (current.expires <= now) {
+        if (options.forceRefresh || current.expires <= now) {
           throw new Error(
             `OAuth: refresh for ${provider}/${resolvedAccountId} is backed off until ` +
               `${new Date(backoff.retryAt).toISOString()} after a previous failure.`
@@ -304,7 +314,7 @@ export class OAuthAuthManager {
           // Proactive rotation is best-effort. If the access token is still
           // valid, keep serving instead of turning a transient token-endpoint
           // failure into an immediate provider outage.
-          if (current.expires <= Date.now()) throw error;
+          if (options.forceRefresh || current.expires <= Date.now()) throw error;
           logger.warn(
             `OAuth: Proactive refresh failed for ${provider}/${resolvedAccountId}; ` +
               `continuing with the still-valid access token.`
@@ -325,6 +335,14 @@ export class OAuthAuthManager {
     }
 
     return auth.apiKey;
+  }
+
+  async forceRefresh(
+    provider: OAuthProvider,
+    accountId?: string | null,
+    signal?: AbortSignal
+  ): Promise<string> {
+    return this.getApiKey(provider, accountId, { forceRefresh: true, signal });
   }
 
   private async refreshCredentials(

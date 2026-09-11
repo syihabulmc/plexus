@@ -29,6 +29,26 @@ properties:
         type: integer
       cost:
         type: number
+      input_tokens_details:
+        type: object
+        additionalProperties: true
+        description: >-
+          Per-modality input token detail, forwarded as received when the upstream
+          reports it (for example `image_tokens`). Omitted by the `/v1/images`
+          response, which projects only the flat token counts.
+        properties:
+          image_tokens:
+            type: integer
+      output_tokens_details:
+        type: object
+        additionalProperties: true
+        description: >-
+          Per-modality output token detail, forwarded as received when the upstream
+          reports it (for example `image_tokens`). Omitted by the `/v1/images`
+          response, which projects only the flat token counts.
+        properties:
+          image_tokens:
+            type: integer
 required:
   - created
   - data

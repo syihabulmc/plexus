@@ -244,7 +244,12 @@ export async function registerResponsesRoute(
 
       const abortController = new AbortController();
       const { signal: dispatchSignal, resolveTimeoutMs } = wireUpstreamTimeout(abortController);
-      earlyDisconnect = wireEarlyDisconnectDetection(request, abortController);
+      earlyDisconnect = wireEarlyDisconnectDetection(
+        request,
+        abortController,
+        requestId,
+        incomingApiType === 'responses:lite'
+      );
       const stallDetectionResult = wireStallDetection(abortController, getGlobalStallConfig());
       const unifiedResponse = await dispatcher.dispatch(
         unifiedRequest,

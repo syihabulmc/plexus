@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { ImageGenerationTransformerFactory } from '../dispatch/image-transformer-factory';
+import { CodexImageTransformer } from '../../transformers/images/codex';
 
 describe('ImageGenerationTransformerFactory', () => {
   test('resolves OpenAI Images targets', () => {
@@ -17,6 +18,12 @@ describe('ImageGenerationTransformerFactory', () => {
     );
   });
 
+  test('resolves the dedicated Codex image target', () => {
+    const transformer = ImageGenerationTransformerFactory.getTransformer('codex-images');
+    expect(transformer).toBeInstanceOf(CodexImageTransformer);
+    expect(transformer.name).toBe('codex-images');
+  });
+
   test('rejects unsupported target protocols', () => {
     expect(() => ImageGenerationTransformerFactory.getTransformer('messages')).toThrow(
       'Unsupported image provider type'
@@ -27,5 +34,9 @@ describe('ImageGenerationTransformerFactory', () => {
     expect(() => ImageGenerationTransformerFactory.getTransformer('openrouter')).toThrow(
       'Unsupported image provider type'
     );
+  });
+
+  test('names Codex among the supported targets in the error message', () => {
+    expect(() => ImageGenerationTransformerFactory.getTransformer('messages')).toThrow(/Codex/);
   });
 });

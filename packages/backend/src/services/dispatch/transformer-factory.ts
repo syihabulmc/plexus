@@ -7,6 +7,7 @@ import {
 } from '../../transformers/index';
 import { ResponsesTransformer } from '../../transformers/responses';
 import { OllamaTransformer } from '../../transformers/ollama';
+import { ImageBridgeTransformer } from '../../transformers/image-bridge';
 import { getApiBaseType } from '../../utils/api-format';
 
 /**
@@ -34,9 +35,16 @@ export class TransformerFactory {
         return new ResponsesTransformer();
       case 'ollama':
         return new OllamaTransformer();
+      // Not a wire protocol: the auto-bridge (image-model-bridge.ts) tags its
+      // already-unified output `apiType: 'images'`, and the response handler
+      // resolves a provider transformer from that tag. The no-op transformer
+      // defines no transformStream, which is what lets the bridged unified
+      // chunk stream reach the client formatter untouched.
+      case 'images':
+        return new ImageBridgeTransformer();
       default:
         throw new Error(
-          `Unsupported provider type: ${providerType}. Only 'messages', 'gemini', 'chat', 'completions', 'responses', and 'ollama' are allowed.`
+          `Unsupported provider type: ${providerType}. Only 'messages', 'gemini', 'chat', 'completions', 'responses', 'ollama', and 'images' are allowed.`
         );
     }
   }

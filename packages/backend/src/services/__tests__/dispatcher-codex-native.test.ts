@@ -373,4 +373,57 @@ describe('Native Codex OAuth pass-through', () => {
     expect(sent.input).toBeDefined();
     expect(sent.messages).toBeUndefined();
   });
+
+  test('reactively force-refreshes token and retries when codex backend returns 401', async () => {
+    setConfigForTesting(codexOAuthConfig());
+    const REFRESHED_ACCOUNT_ID = 'acc_refreshed_99999';
+    const REFRESHED_CODEX_TOKEN = (() => {
+      const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url');
+      const payload = Buffer.from(
+        JSON.stringify({
+          'https://api.openai.com/auth': { chatgpt_account_id: REFRESHED_ACCOUNT_ID },
+        })
+      ).toString('base64url');
+      return `${header}.${payload}.sig`;
+    })();
+
+    const getApiKeySpy = registerSpy(OAuthAuthManager.getInstance(), 'getApiKey');
+    getApiKeySpy.mockResolvedValueOnce(CODEX_TOKEN).mockResolvedValueOnce(REFRESHED_CODEX_TOKEN);
+
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: 'Provided authentication token is expired.',
+              code: 'token_expired',
+            },
+          }),
+          { status: 401, headers: { 'content-type': 'application/json' } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(UPSTREAM_SSE, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      );
+
+    const response = await new Dispatcher().dispatch(codexCliRequest());
+    expect(response.stream).toBeDefined();
+
+    const clientBytes = await drain(response.stream!);
+    expect(clientBytes).toContain('event: response.created');
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // First attempt used expired token
+    const firstCallInit = fetchSpy.mock.calls[0] as any[];
+    expect(firstCallInit[1].headers['Authorization']).toBe(`Bearer ${CODEX_TOKEN}`);
+    expect(firstCallInit[1].headers['chatgpt-account-id']).toBe(ACCOUNT_ID);
+
+    // Second attempt used refreshed token and updated account id
+    const secondCallInit = fetchSpy.mock.calls[1] as any[];
+    expect(secondCallInit[1].headers['Authorization']).toBe(`Bearer ${REFRESHED_CODEX_TOKEN}`);
+    expect(secondCallInit[1].headers['chatgpt-account-id']).toBe(REFRESHED_ACCOUNT_ID);
+  });
 });

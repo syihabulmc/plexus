@@ -19,6 +19,12 @@ export async function registerTestRoutes(fastify: FastifyInstance, probeService:
    * POST /v0/management/test
    * Test a specific provider/model combination with a canonical probe
    * request. Delegates to ProbeService.runProbe with source='manual'.
+   *
+   * NOTE: probes run through the ordinary dispatch path, so the default
+   * `apiType: 'chat'` on an IMAGE-typed model is auto-bridged to an image
+   * generation (services/dispatch/image-model-bridge.ts) — i.e. testing an
+   * image model without passing `apiType: 'images'` really does generate an
+   * image (and bills for it), rather than failing as a protocol mismatch.
    */
   fastify.post('/v0/management/test', async (request, reply) => {
     const body = request.body as { provider: string; model: string; apiType?: string };

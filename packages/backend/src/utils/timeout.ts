@@ -39,28 +39,21 @@ export function wireUpstreamTimeout(
 }
 
 /**
- * Start early client-disconnect detection before dispatch.
+ * Observe an early socket closure before dispatch.
  *
- * Bun's node:http layer does NOT reliably fire close/abort events when a
- * client disconnects during streaming POST responses. The only working
- * detection mechanism is polling `bunHandle.closed` on the Socket object.
- *
- * The response-handler's polling only starts after the dispatcher returns,
- * so there's a gap: if the client disconnects while fetch() is still
- * pending (upstream hasn't responded yet), nothing detects the disconnect.
- * The fetch keeps running, wasting upstream API quota.
- *
- * This function starts the bunHandle.closed polling BEFORE the dispatch,
- * and aborts the route's AbortController when the client disconnects.
- * This propagates through the route signal to fetch(), causing it to
- * throw AbortError and the dispatcher to stop waiting.
+ * Bun's node:http close/abort events are unreliable for streaming POST
+ * responses. `bunHandle.closed` is useful telemetry, but it has produced
+ * false positives for Codex Responses Lite traffic. That route can defer
+ * cancellation while all other callers retain the existing abort behavior.
  *
  * Callers must call cleanup() after the dispatch completes (whether success
  * or failure) to stop the polling interval.
  */
 export function wireEarlyDisconnectDetection(
   request: any,
-  abortController: AbortController
+  abortController: AbortController,
+  requestId: string,
+  deferSocketClose = false
 ): { cleanup: () => void } {
   const rawSocket = request?.raw?.socket;
   const symHandle = rawSocket
@@ -77,8 +70,16 @@ export function wireEarlyDisconnectDetection(
   let poll: ReturnType<typeof setInterval> | null = setInterval(() => {
     if (cleanedUp) return;
     if (bunHandle.closed) {
-      if (!abortController.signal.aborted) {
-        logger.debug(`Early disconnect detected (bunHandle.closed), aborting upstream fetch`);
+      if (deferSocketClose) {
+        logger.info(
+          `Socket close observed for request ${requestId} before dispatch ` +
+            '(source=bunHandle.closed); deferring upstream cancellation'
+        );
+      } else if (!abortController.signal.aborted) {
+        logger.info(
+          `Client disconnect observed for request ${requestId} before dispatch ` +
+            '(source=bunHandle.closed); aborting upstream fetch'
+        );
         abortController.abort(new DOMException('Client disconnected', 'AbortError'));
       }
       cleanedUp = true;

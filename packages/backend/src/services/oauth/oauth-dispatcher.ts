@@ -1,3 +1,4 @@
+import { isOAuthPlaceholderUrl } from '../../config';
 import type { RouteResult } from '../routing/router';
 
 /**
@@ -18,10 +19,10 @@ import type { RouteResult } from '../routing/router';
 export function isOAuthRoute(route: RouteResult, targetApiType: string): boolean {
   if (targetApiType.toLowerCase() === 'oauth') return true;
   if (typeof route.config.api_base_url === 'string') {
-    return route.config.api_base_url.startsWith('oauth://');
+    return isOAuthPlaceholderUrl(route.config.api_base_url);
   }
   const urlMap = route.config.api_base_url as Record<string, string>;
-  return Object.values(urlMap).some((value) => value.startsWith('oauth://'));
+  return Object.values(urlMap).some(isOAuthPlaceholderUrl);
 }
 
 export function isClaudeMaskingApiKeyRoute(route: RouteResult, targetApiType: string): boolean {

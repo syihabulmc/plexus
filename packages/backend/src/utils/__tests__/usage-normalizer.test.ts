@@ -94,6 +94,58 @@ describe('usage-normalizer - OpenAI Responses usage', () => {
     expect(normalized.cache_creation_tokens).toBe(0);
     expect(normalized.input_tokens).toBeGreaterThanOrEqual(0);
   });
+
+  test('carries image_tokens from input/output token details', () => {
+    // Emitted by the built-in `image_generation` tool on the Responses API.
+    const normalized = normalizeOpenAIResponsesUsage({
+      input_tokens: 1012,
+      output_tokens: 4160,
+      total_tokens: 5172,
+      input_tokens_details: {
+        cached_tokens: 0,
+        image_tokens: 8,
+      },
+      output_tokens_details: {
+        reasoning_tokens: 0,
+        image_tokens: 4160,
+      },
+    });
+
+    expect(normalized.input_image_tokens).toBe(8);
+    expect(normalized.output_image_tokens).toBe(4160);
+  });
+
+  test('carries a zero image_tokens detail distinctly from an absent one', () => {
+    const normalized = normalizeOpenAIResponsesUsage({
+      input_tokens: 10,
+      output_tokens: 20,
+      total_tokens: 30,
+      input_tokens_details: { cached_tokens: 0, image_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0, image_tokens: 0 },
+    });
+
+    expect(normalized.input_image_tokens).toBe(0);
+    expect(normalized.output_image_tokens).toBe(0);
+  });
+
+  test('omits image token keys entirely when the details are absent', () => {
+    const normalized = normalizeOpenAIResponsesUsage({
+      input_tokens: 9299,
+      output_tokens: 577,
+      total_tokens: 9876,
+      input_tokens_details: { cached_tokens: 8448 },
+      output_tokens_details: { reasoning_tokens: 512 },
+    });
+
+    expect(normalized).toStrictEqual({
+      input_tokens: 851,
+      output_tokens: 577,
+      total_tokens: 9876,
+      reasoning_tokens: 512,
+      cached_tokens: 8448,
+      cache_creation_tokens: 0,
+    });
+  });
 });
 
 describe('usage-normalizer - Gemini usage', () => {

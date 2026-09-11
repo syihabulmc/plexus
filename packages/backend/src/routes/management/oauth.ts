@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { OAuthLoginSessionManager } from '../../services/oauth/oauth-login-session';
 import { OAuthAuthManager } from '../../services/oauth/oauth-auth-manager';
 import type { OAuthProvider, OAuthProviderId } from '../../services/oauth/oauth-providers';
-import { getOAuthProviderModels } from '../../services/providers/provider-model-discovery';
+import {
+  getOAuthProviderModels,
+  listCodexOAuthModels,
+} from '../../services/providers/provider-model-discovery';
 
 const startSessionSchema = z.object({
   providerId: z.string().min(1),
@@ -26,6 +29,9 @@ const credentialStatusQuerySchema = z.object({
 
 const getModelsQuerySchema = z.object({
   providerId: z.string().min(1),
+  // Which OAuth account to ask. Only Codex live discovery uses it; a blank
+  // value means "the provider's default account".
+  accountId: z.string().optional(),
 });
 
 const toProviderResponse = (provider: {
@@ -173,8 +179,19 @@ export async function registerOAuthRoutes(
     }
 
     try {
+      // Codex is the one OAuth provider whose real model list is account-
+      // scoped, so it is fetched live (with a catalog fallback + warning).
+      if (parsed.data.providerId === 'openai-codex') {
+        const discovery = await listCodexOAuthModels(parsed.data.accountId || undefined);
+        return reply.send({
+          data: discovery.models,
+          source: discovery.source,
+          ...(discovery.warning ? { warning: discovery.warning } : {}),
+        });
+      }
+
       const modelList = getOAuthProviderModels(parsed.data.providerId);
-      return reply.send({ data: modelList });
+      return reply.send({ data: modelList, source: 'catalog' });
     } catch (error) {
       return reply
         .code(400)

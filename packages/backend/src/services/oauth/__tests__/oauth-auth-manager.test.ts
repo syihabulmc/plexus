@@ -261,4 +261,79 @@ describe('OAuthAuthManager', () => {
 
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
+
+  it('forces a refresh even when the token is still valid', async () => {
+    const manager = await createManager();
+
+    await expect(manager.forceRefresh('anthropic', 'personal')).resolves.toBe('new-access');
+
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.configService.setOAuthCredentials).toHaveBeenCalledWith('anthropic', 'personal', {
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      expiresAt: expect.any(Number),
+    });
+  });
+
+  it('throws on forceRefresh failure even if the existing access token has not expired', async () => {
+    mocks.refresh.mockRejectedValue(new Error('HTTP 401: Invalid token'));
+    const manager = await createManager();
+
+    await expect(manager.forceRefresh('anthropic', 'personal')).rejects.toThrow(
+      'HTTP 401: Invalid token'
+    );
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes when token is within refreshIfExpiringWithinMs buffer', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    mocks.configService.getOAuthCredentials.mockResolvedValue({
+      accessToken: 'expiring-access',
+      refreshToken: 'valid-refresh',
+      expiresAt: Date.now() + 5 * 60 * 1000, // 5 minutes remaining
+    });
+    const manager = await createManager();
+
+    // With a 10-minute buffer, 5 minutes remaining should trigger refresh
+    await expect(
+      manager.getApiKey('anthropic', 'personal', { refreshIfExpiringWithinMs: 10 * 60 * 1000 })
+    ).resolves.toBe('new-access');
+
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes by default when token is within the default 60s expiry buffer', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    mocks.configService.getOAuthCredentials.mockResolvedValue({
+      accessToken: 'almost-expired-access',
+      refreshToken: 'valid-refresh',
+      expiresAt: Date.now() + 30 * 1000, // 30 seconds remaining (<= 60s default buffer)
+    });
+    const manager = await createManager();
+
+    await expect(manager.getApiKey('anthropic', 'personal')).resolves.toBe('new-access');
+
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors refresh backoff on repeated forceRefresh calls after token-endpoint failure', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    mocks.refresh.mockRejectedValue(new Error('HTTP 500: Internal Server Error'));
+    const manager = await createManager();
+
+    // First forceRefresh attempts refresh and fails, establishing a 60s backoff
+    await expect(manager.forceRefresh('anthropic', 'personal')).rejects.toThrow('HTTP 500');
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+
+    // Second forceRefresh within 60s throws backoff error without hitting the endpoint again
+    await expect(manager.forceRefresh('anthropic', 'personal')).rejects.toThrow(
+      /is backed off until/
+    );
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+
+    // After backoff window expires (60s), next forceRefresh can retry
+    vi.advanceTimersByTime(61 * 1000);
+    await expect(manager.forceRefresh('anthropic', 'personal')).rejects.toThrow('HTTP 500');
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+  });
 });

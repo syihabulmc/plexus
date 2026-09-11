@@ -39,9 +39,9 @@ const MAX_IMAGE_REFERENCES = 16;
 const MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024;
 const REMOTE_IMAGE_TIMEOUT_MS = 15_000;
 const PIXEL_SIZE_PATTERN = /^\d+x\d+$/;
-const TIER_SIZE_PATTERN = /^(?:512|1K|2K|4K)$/;
+export const TIER_SIZE_PATTERN = /^(?:512|1K|2K|4K)$/;
 
-const OPENAI_TIER_SIZES: Record<ImageResolution, string> = {
+export const OPENAI_TIER_SIZES: Record<ImageResolution, string> = {
   '512': '512x512',
   '1K': '1024x1024',
   '2K': '2048x2048',
@@ -105,8 +105,10 @@ function isUnsafeRemoteImageHost(hostname: string): boolean {
 }
 
 export async function resolveImageReference(
-  reference: UnifiedImageReference
+  reference: UnifiedImageReference,
+  signal?: AbortSignal
 ): Promise<{ mimeType: string; data: Buffer }> {
+  signal?.throwIfAborted();
   const inline = parseImageDataUrl(reference.image_url.url);
   if (inline) return inline;
 
@@ -129,7 +131,7 @@ export async function resolveImageReference(
     const response = await fetch(url, {
       redirect: 'error',
       headers: { Accept: 'image/*' },
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     });
     if (!response.ok) {
       throw new ImageRequestValidationError(`Image reference URL returned HTTP ${response.status}`);
@@ -152,6 +154,7 @@ export async function resolveImageReference(
     }
     return { mimeType, data };
   } catch (error) {
+    signal?.throwIfAborted();
     if (error instanceof ImageRequestValidationError) throw error;
     if ((error as any)?.name === 'AbortError') {
       throw new ImageRequestValidationError('Image reference download timed out');
@@ -379,16 +382,21 @@ export function normalizeImageUsage(usage: any): UnifiedImageGenerationResponse[
 }
 
 export async function formatOpenRouterImageResponse(
-  response: UnifiedImageGenerationResponse
+  response: UnifiedImageGenerationResponse,
+  signal?: AbortSignal
 ): Promise<any> {
+  signal?.throwIfAborted();
   const data = await Promise.all(
     response.data.map(async (item) => {
       if (item.b64_json !== undefined || item.url === undefined) return item;
-      const resolved = await resolveImageReference({
-        type: 'image_url',
-        image_url: { url: item.url },
-        media_type: item.media_type,
-      });
+      const resolved = await resolveImageReference(
+        {
+          type: 'image_url',
+          image_url: { url: item.url },
+          media_type: item.media_type,
+        },
+        signal
+      );
       return {
         b64_json: resolved.data.toString('base64'),
         media_type: resolved.mimeType,
@@ -422,7 +430,7 @@ export async function formatOpenRouterImageResponse(
   };
 }
 
-function resolveOpenAISize(request: UnifiedImageGenerationRequest): string | undefined {
+export function resolveOpenAISize(request: UnifiedImageGenerationRequest): string | undefined {
   if (request.size) {
     if (TIER_SIZE_PATTERN.test(request.size)) {
       return OPENAI_TIER_SIZES[request.size as ImageResolution];
@@ -447,7 +455,8 @@ function appendFormValue(formData: FormData, key: string, value: unknown): void 
 }
 
 async function buildOpenAIReferenceRequest(
-  request: UnifiedImageGenerationRequest
+  request: UnifiedImageGenerationRequest,
+  signal?: AbortSignal
 ): Promise<FormData> {
   const references = request.input_references ?? [];
   if (references.length !== 1) {
@@ -457,14 +466,14 @@ async function buildOpenAIReferenceRequest(
   }
 
   const reference = references[0]!;
-  const parsed = await resolveImageReference(reference);
+  const parsed = await resolveImageReference(reference, signal);
 
   const formData = new FormData();
   appendFormValue(formData, 'model', request.model);
   appendFormValue(formData, 'prompt', request.prompt);
   appendFormValue(formData, 'n', request.n);
   appendFormValue(formData, 'size', resolveOpenAISize(request));
-  appendFormValue(formData, 'response_format', request.response_format ?? 'b64_json');
+  appendFormValue(formData, 'response_format', request.response_format);
   appendFormValue(formData, 'quality', request.quality === 'auto' ? undefined : request.quality);
   appendFormValue(formData, 'user', request.user);
   appendFormValue(formData, 'output_format', request.output_format);
@@ -476,7 +485,96 @@ async function buildOpenAIReferenceRequest(
     new Blob([new Uint8Array(parsed.data)], { type: parsed.mimeType }),
     'reference.png'
   );
+
+  if (request.mask) {
+    const mask = await resolveImageReference(request.mask, signal);
+    formData.append(
+      'mask',
+      new Blob([new Uint8Array(mask.data)], { type: mask.mimeType }),
+      'mask.png'
+    );
+  }
+
   return formData;
+}
+
+/**
+ * Sniffs an image media type from the magic bytes at the head of a buffer.
+ *
+ * Mirrors `sniffImageMimeSubtype` in `image-rendering.ts` (which reads base64
+ * text rather than bytes):
+ *   - PNG:  \x89 P N G
+ *   - JPEG: \xFF \xD8
+ *   - WebP: R I F F ...(4 size bytes)... W E B P
+ *   - GIF:  G I F 8
+ * Anything unrecognized defaults to png, matching that renderer.
+ */
+function sniffImageMediaType(data: Buffer): string {
+  if (
+    data.length >= 4 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4e &&
+    data[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) return 'image/jpeg';
+  if (
+    data.length >= 12 &&
+    data.toString('latin1', 0, 4) === 'RIFF' &&
+    data.toString('latin1', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  if (data.length >= 4 && data.toString('latin1', 0, 4) === 'GIF8') return 'image/gif';
+  return 'image/png';
+}
+
+/**
+ * Wraps raw upload bytes as an inline image reference.
+ *
+ * The multipart edits route and the deprecated edit-request converter both hand
+ * the dispatcher buffers; the IR only speaks image data URLs, so the bytes
+ * become a base64 data URL. Multipart clients routinely omit the part's content
+ * type — curl's `-F image=@photo.webp` sends `application/octet-stream` — and a
+ * non-`image/` data URL is not parseable as one (`parseImageDataUrl`), so an
+ * unusable MIME falls back to the payload's own signature rather than failing
+ * the upload later with a URL-parsing error.
+ */
+export function imageReferenceFromBuffer(data: Buffer, mimeType?: string): UnifiedImageReference {
+  const mediaType = mimeType?.startsWith('image/') ? mimeType : sniffImageMediaType(data);
+  return {
+    type: 'image_url',
+    image_url: { url: `data:${mediaType};base64,${data.toString('base64')}` },
+    media_type: mediaType,
+  };
+}
+
+/**
+ * Converts a legacy multipart edit request into the single image IR.
+ *
+ * @deprecated Only the `Dispatcher.dispatchImageEdits` facade still needs this;
+ * new callers should build a `UnifiedImageGenerationRequest` directly.
+ */
+export function editRequestToGenerationRequest(
+  request: UnifiedImageEditRequest
+): UnifiedImageGenerationRequest {
+  return {
+    requestId: request.requestId,
+    model: request.model,
+    prompt: request.prompt,
+    n: request.n,
+    size: request.size,
+    response_format: request.response_format,
+    quality: request.quality,
+    user: request.user,
+    input_references: [imageReferenceFromBuffer(request.image, request.mimeType)],
+    ...(request.mask ? { mask: imageReferenceFromBuffer(request.mask, request.maskMimeType) } : {}),
+    incomingApiType: request.incomingApiType,
+    originalBody: request.originalBody,
+    metadata: request.metadata,
+  };
 }
 
 function buildOpenAIGenerationRequest(request: UnifiedImageGenerationRequest): Record<string, any> {
@@ -549,9 +647,12 @@ export class ImageTransformer {
     };
   }
 
-  async transformGenerationRequest(request: UnifiedImageGenerationRequest): Promise<any> {
+  async transformGenerationRequest(
+    request: UnifiedImageGenerationRequest,
+    signal?: AbortSignal
+  ): Promise<any> {
     if (request.input_references && request.input_references.length > 0) {
-      return buildOpenAIReferenceRequest(request);
+      return buildOpenAIReferenceRequest(request, signal);
     }
     return buildOpenAIGenerationRequest(request);
   }
@@ -574,6 +675,7 @@ export class ImageTransformer {
     };
   }
 
+  /** @deprecated Multipart edits are parsed into `UnifiedImageGenerationRequest` by the route. */
   async parseEditRequest(input: any): Promise<Partial<UnifiedImageEditRequest>> {
     return {
       model: input.model,
@@ -586,6 +688,7 @@ export class ImageTransformer {
     };
   }
 
+  /** @deprecated Superseded by `transformGenerationRequest`, which builds the same form. */
   async transformEditRequest(request: UnifiedImageEditRequest): Promise<FormData> {
     const formData = new FormData();
 
@@ -612,6 +715,7 @@ export class ImageTransformer {
     return formData;
   }
 
+  /** @deprecated Superseded by `transformGenerationResponse`. */
   async transformEditResponse(response: any): Promise<UnifiedImageEditResponse> {
     return {
       created: response.created ?? Math.floor(Date.now() / 1000),

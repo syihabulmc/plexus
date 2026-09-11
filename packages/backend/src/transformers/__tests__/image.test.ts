@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ImageTransformer } from '../image';
+import { editRequestToGenerationRequest, ImageTransformer } from '../image';
 
 describe('ImageTransformer', () => {
   let transformer: ImageTransformer;
@@ -304,6 +304,172 @@ describe('ImageTransformer', () => {
   describe('name', () => {
     it('should have correct transformer name', () => {
       expect(transformer.name).toBe('image');
+    });
+  });
+
+  describe('transformGenerationRequest with input references', () => {
+    it('appends the mask to the multipart edit form', async () => {
+      const result = (await transformer.transformGenerationRequest({
+        model: 'gpt-image-1',
+        prompt: 'Repaint the masked area',
+        input_references: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBO' } }],
+        mask: { type: 'image_url', image_url: { url: 'data:image/png;base64,/w==' } },
+      })) as FormData;
+
+      expect(result).toBeInstanceOf(FormData);
+      expect(result.get('image')).toBeInstanceOf(Blob);
+
+      const mask = result.get('mask') as Blob;
+      expect(mask).toBeInstanceOf(Blob);
+      expect(mask.type).toBe('image/png');
+      expect(new Uint8Array(await mask.arrayBuffer())).toEqual(new Uint8Array([0xff]));
+    });
+
+    it('omits the mask field when no mask was supplied', async () => {
+      const result = (await transformer.transformGenerationRequest({
+        model: 'gpt-image-1',
+        prompt: 'Add sunglasses',
+        input_references: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBO' } }],
+      })) as FormData;
+
+      expect(result.get('mask')).toBeNull();
+    });
+
+    it('omits response_format when the client did not supply one', async () => {
+      const result = (await transformer.transformGenerationRequest({
+        model: 'dall-e-2',
+        prompt: 'Add sunglasses',
+        input_references: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBO' } }],
+      })) as FormData;
+
+      expect(result.get('response_format')).toBeNull();
+    });
+
+    it('forwards response_format when the client supplied one', async () => {
+      const result = (await transformer.transformGenerationRequest({
+        model: 'dall-e-2',
+        prompt: 'Add sunglasses',
+        response_format: 'url',
+        input_references: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBO' } }],
+      })) as FormData;
+
+      expect(result.get('response_format')).toBe('url');
+    });
+  });
+
+  describe('editRequestToGenerationRequest', () => {
+    it('converts multipart buffers into image references', () => {
+      const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const mask = Buffer.from([0x01, 0x02, 0x03]);
+
+      const result = editRequestToGenerationRequest({
+        requestId: 'req-1',
+        model: 'gpt-image-1',
+        prompt: 'Add a hat',
+        image,
+        filename: 'input.webp',
+        mimeType: 'image/webp',
+        mask,
+        maskFilename: 'mask.png',
+        maskMimeType: 'image/png',
+        n: 2,
+        size: '1024x1024',
+        response_format: 'b64_json',
+        quality: 'high',
+        user: 'user_123',
+        incomingApiType: 'images',
+        originalBody: { prompt: 'Add a hat' },
+      });
+
+      expect(result).toEqual({
+        requestId: 'req-1',
+        model: 'gpt-image-1',
+        prompt: 'Add a hat',
+        n: 2,
+        size: '1024x1024',
+        response_format: 'b64_json',
+        quality: 'high',
+        user: 'user_123',
+        input_references: [
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/webp;base64,${image.toString('base64')}` },
+            media_type: 'image/webp',
+          },
+        ],
+        mask: {
+          type: 'image_url',
+          image_url: { url: `data:image/png;base64,${mask.toString('base64')}` },
+          media_type: 'image/png',
+        },
+        incomingApiType: 'images',
+        originalBody: { prompt: 'Add a hat' },
+      });
+    });
+
+    it('sniffs the media type when the upload carries no image MIME', () => {
+      const webp = Buffer.concat([
+        Buffer.from('RIFF', 'latin1'),
+        Buffer.from([0x1a, 0x00, 0x00, 0x00]),
+        Buffer.from('WEBP', 'latin1'),
+        Buffer.from('payload', 'latin1'),
+      ]);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+
+      const result = editRequestToGenerationRequest({
+        model: 'gpt-image-1',
+        prompt: 'Add a hat',
+        image: webp,
+        filename: 'photo.webp',
+        mimeType: 'application/octet-stream',
+        mask: png,
+        maskFilename: 'mask.png',
+        maskMimeType: 'application/octet-stream',
+      });
+
+      expect(result.input_references?.[0]).toEqual({
+        type: 'image_url',
+        image_url: { url: `data:image/webp;base64,${webp.toString('base64')}` },
+        media_type: 'image/webp',
+      });
+      expect(result.mask?.media_type).toBe('image/png');
+    });
+
+    it('falls back to png when the bytes match no known image signature', () => {
+      const result = editRequestToGenerationRequest({
+        model: 'gpt-image-1',
+        prompt: 'Add a hat',
+        image: Buffer.from('not-an-image', 'latin1'),
+        filename: 'blob.bin',
+        mimeType: 'application/octet-stream',
+      });
+
+      expect(result.input_references?.[0]?.media_type).toBe('image/png');
+    });
+
+    it('omits the mask and carries the key access policy metadata', () => {
+      const metadata = {
+        plexus_metadata: { plexus_key_policy: { allowedModels: ['gpt-image-1'] } },
+      } as any;
+
+      const result = editRequestToGenerationRequest({
+        model: 'gpt-image-1',
+        prompt: 'Change background to blue',
+        image: Buffer.from([0x01]),
+        filename: 'input.png',
+        mimeType: 'image/png',
+        metadata,
+      });
+
+      expect(result.mask).toBeUndefined();
+      expect(result.metadata).toBe(metadata);
+      expect(result.input_references).toEqual([
+        {
+          type: 'image_url',
+          image_url: { url: 'data:image/png;base64,AQ==' },
+          media_type: 'image/png',
+        },
+      ]);
     });
   });
 });

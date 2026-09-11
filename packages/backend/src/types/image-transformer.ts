@@ -15,7 +15,10 @@ export interface ImageGenerationTransformer {
 
   getAuthHeaders?(apiKey: string, headers: Record<string, string>): void;
 
-  transformGenerationRequest(request: UnifiedImageGenerationRequest): Promise<any>;
+  transformGenerationRequest(
+    request: UnifiedImageGenerationRequest,
+    signal?: AbortSignal
+  ): Promise<any>;
 
   transformGenerationResponse(
     response: any,

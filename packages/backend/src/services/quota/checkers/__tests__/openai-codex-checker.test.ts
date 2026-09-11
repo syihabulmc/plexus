@@ -190,8 +190,61 @@ describe('openai-codex checker', () => {
     const meters = await checkerDef.check(makeCtx());
 
     expect(meters).toHaveLength(1);
-    expect(authManager.getApiKey).toHaveBeenCalledWith('openai-codex', undefined, {
-      refreshIfOlderThanMs: 8 * 24 * 60 * 60 * 1000,
+    expect(authManager.getApiKey).toHaveBeenCalledWith(
+      'openai-codex',
+      undefined,
+      expect.objectContaining({
+        refreshIfExpiringWithinMs: 10 * 60 * 1000,
+      })
+    );
+  });
+
+  it('reactively force-refreshes and retries when upstream returns 401 with OAuth', async () => {
+    const initialToken = makeToken({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'old_acct' },
     });
+    const refreshedToken = makeToken({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'new_acct' },
+    });
+
+    const authManager = OAuthAuthManager.getInstance();
+    const getApiKeySpy = registerSpy(authManager, 'getApiKey');
+    getApiKeySpy.mockResolvedValueOnce(initialToken).mockResolvedValueOnce(refreshedToken);
+
+    let fetchCount = 0;
+    setFetchMock(async () => {
+      fetchCount++;
+      if (fetchCount === 1) {
+        return new Response(JSON.stringify({ error: { message: 'token_expired' } }), {
+          status: 401,
+          statusText: 'Unauthorized',
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: { used_percent: 25 },
+          },
+        }),
+        { status: 200 }
+      );
+    });
+
+    const meters = await checkerDef.check(makeCtx());
+
+    expect(meters).toHaveLength(1);
+    expect(meters[0]?.used).toBe(25);
+    expect(fetchCount).toBe(2);
+    expect(getApiKeySpy).toHaveBeenCalledTimes(2);
+    expect(getApiKeySpy).toHaveBeenLastCalledWith(
+      'openai-codex',
+      undefined,
+      expect.objectContaining({
+        forceRefresh: true,
+        signal: expect.anything(),
+      })
+    );
   });
 });

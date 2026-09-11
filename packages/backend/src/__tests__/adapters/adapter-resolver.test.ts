@@ -568,16 +568,19 @@ describe('isAnthropicTargetProvider', () => {
     ).toBe(false);
   });
 
-  it('matches an oauth:// route whose oauth_provider is anthropic', () => {
-    expect(
-      isAnthropicTargetProvider(
-        makeRoute(undefined, undefined, {
-          api_base_url: 'oauth://anthropic',
-          oauth_provider: 'anthropic',
-        })
-      )
-    ).toBe(true);
-  });
+  it.each(['oauth://anthropic', 'OAuth://anthropic', ' OAUTH://anthropic '])(
+    'matches placeholder %j whose oauth_provider is anthropic',
+    (api_base_url) => {
+      expect(
+        isAnthropicTargetProvider(
+          makeRoute(undefined, undefined, {
+            api_base_url,
+            oauth_provider: 'anthropic',
+          })
+        )
+      ).toBe(true);
+    }
+  );
 
   it('does not match an oauth:// route for a non-Anthropic OAuth provider', () => {
     expect(

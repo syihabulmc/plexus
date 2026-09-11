@@ -1,6 +1,11 @@
-import { getProviderTypes } from '../../config';
+import { getProviderTypes, isOAuthPlaceholderUrl } from '../../config';
 import { logger } from '../../utils/logger';
-import { getApiBaseType, isApiSubtype, normalizeApiAccessList } from '../../utils/api-format';
+import {
+  getApiBaseType,
+  isApiSubtype,
+  isImageTargetApiType,
+  normalizeApiAccessList,
+} from '../../utils/api-format';
 import type { RouteResult } from '../routing/router';
 
 /**
@@ -60,9 +65,7 @@ export function selectTargetApiType(
     // Case-insensitive match
     const match = availableTypes.find(
       (t: string) =>
-        t.toLowerCase() === incoming ||
-        (incoming === 'images' &&
-          ['chat', 'gemini', 'openai-images', 'openrouter-images'].includes(getApiBaseType(t)))
+        t.toLowerCase() === incoming || (incoming === 'images' && isImageTargetApiType(t))
     );
     if (match) {
       targetApiType = match;
@@ -112,7 +115,12 @@ export function resolveImageProviderBaseUrl(route: RouteResult, targetApiType: s
   return resolveProviderBaseUrl(route, targetApiType);
 }
 
-export function resolveProviderBaseUrl(route: RouteResult, targetApiType: string): string {
+/**
+ * Resolves the configured base URL verbatim, including the `oauth://`
+ * placeholder. Only predicates (e.g. "is this a Gemini endpoint?") should use
+ * this; anything that dispatches must go through `resolveProviderBaseUrl`.
+ */
+function resolveConfiguredBaseUrl(route: RouteResult, targetApiType: string): string {
   let rawBaseUrl: string;
 
   if (!route.config.api_base_url || typeof route.config.api_base_url === 'string') {
@@ -167,9 +175,31 @@ export function resolveProviderBaseUrl(route: RouteResult, targetApiType: string
     }
   }
 
+  // Return the placeholder verbatim: normalizing would turn `oauth://` into
+  // `oauth:/` and hide it from the dispatch guard below.
+  if (isOAuthPlaceholderUrl(rawBaseUrl)) {
+    return rawBaseUrl;
+  }
+
   // Ensure api_base_url doesn't end with slash and strip trailing /v1beta if present
   // (the transformer adds its own /v1beta path segment)
   return stripTrailingApiVersion(rawBaseUrl.replace(/\/$/, ''));
+}
+
+export function resolveProviderBaseUrl(route: RouteResult, targetApiType: string): string {
+  const configuredUrl = resolveConfiguredBaseUrl(route, targetApiType);
+
+  // `oauth://` is a configuration placeholder, never a dispatchable endpoint:
+  // OAuth routes resolve their real upstream URL during payload preparation and
+  // never reach here. Fail loudly rather than handing the placeholder to fetch.
+  if (isOAuthPlaceholderUrl(configuredUrl)) {
+    throw new Error(
+      `Provider '${route.provider}' resolved the placeholder base URL 'oauth://' for api type '${targetApiType}'. ` +
+        'OAuth providers must be dispatched through the OAuth path, which resolves the real upstream URL.'
+    );
+  }
+
+  return configuredUrl;
 }
 
 /**
@@ -182,7 +212,9 @@ export function applyGeminiThinkingConfig(
   targetApiType: string,
   payload: any
 ): any {
-  const baseUrl = resolveProviderBaseUrl(route, targetApiType).toLowerCase();
+  // A predicate, not a dispatch: OAuth routes legitimately reach here with the
+  // `oauth://` placeholder still configured, so resolve it without the guard.
+  const baseUrl = resolveConfiguredBaseUrl(route, targetApiType).toLowerCase();
   const isGemini = baseUrl.includes('generativelanguage.googleapis.com');
   const enabled = route.config.geminiThinkingEnabled === true;
 

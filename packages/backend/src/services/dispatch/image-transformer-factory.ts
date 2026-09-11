@@ -3,6 +3,7 @@ import type { ImageGenerationTransformer } from '../../types/image-transformer';
 import { ImageTransformer } from '../../transformers/image';
 import { GeminiImageTransformer } from '../../transformers/images/gemini';
 import { OpenRouterImageTransformer } from '../../transformers/images/openrouter';
+import { CodexImageTransformer } from '../../transformers/images/codex';
 
 /**
  * Resolves the target-protocol image transformer independently of the
@@ -15,6 +16,8 @@ export class ImageGenerationTransformerFactory {
         return new GeminiImageTransformer();
       case 'openrouter-images':
         return new OpenRouterImageTransformer();
+      case 'codex-images':
+        return new CodexImageTransformer();
       case 'chat':
       case 'completions':
       case 'openai-images':
@@ -22,7 +25,7 @@ export class ImageGenerationTransformerFactory {
         return new ImageTransformer();
       default:
         throw new Error(
-          `Unsupported image provider type: ${providerType}. Supported image targets are OpenAI-compatible, OpenRouter, and Gemini.`
+          `Unsupported image provider type: ${providerType}. Supported image targets are OpenAI-compatible, OpenRouter, Codex, and Gemini.`
         );
     }
   }

@@ -3,6 +3,10 @@ import { Dispatcher } from '../dispatch/dispatcher';
 import { setConfigForTesting } from '../../config';
 import type { UnifiedImageGenerationRequest } from '../../types/unified';
 import { CooldownManager } from '../runtime/cooldown-manager';
+import { CodexVersionService } from '../oauth/codex-version-service';
+import { OAuthAuthManager } from '../oauth/oauth-auth-manager';
+import { registerSpy } from '../../../test/test-utils';
+import { DebugManager } from '../observability/debug-manager';
 
 const fetchMock = vi.fn();
 global.fetch = fetchMock as any;
@@ -42,14 +46,57 @@ const request: UnifiedImageGenerationRequest = {
   requestId: 'image-request',
 };
 
+/** A fake Codex OAuth JWT carrying the account claim the wire header uses. */
+const CODEX_TOKEN = (() => {
+  const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'acc_edits_1' } })
+  ).toString('base64url');
+  return `${header}.${payload}.sig`;
+})();
+
+function codexImagesConfig() {
+  return {
+    providers: {
+      codex: {
+        api_base_url: 'oauth://',
+        api_key: 'oauth',
+        oauth_provider: 'openai-codex',
+        oauth_account: 'acct',
+        models: {
+          'gpt-image-2': { type: 'image', access_via: ['codex-images'] },
+        },
+      },
+    },
+    models: {
+      image_alias: {
+        selector: 'in_order',
+        type: 'image',
+        targets: [{ provider: 'codex', model: 'gpt-image-2' }],
+      },
+    },
+    keys: {},
+    failover: {
+      enabled: true,
+      retryableStatusCodes: [429, 500, 502, 503, 504],
+      retryableErrors: ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND'],
+    },
+    quotas: [],
+  } as any;
+}
+
 describe('Dispatcher image translation', () => {
   beforeEach(async () => {
     fetchMock.mockReset();
+    CodexVersionService.resetForTesting();
+    OAuthAuthManager.resetForTesting();
     await CooldownManager.getInstance().clearCooldown();
   });
 
   afterEach(async () => {
     await CooldownManager.getInstance().clearCooldown();
+    OAuthAuthManager.resetForTesting();
+    CodexVersionService.resetForTesting();
   });
 
   test('translates the unified request to an OpenAI-compatible edit payload', async () => {
@@ -271,6 +318,137 @@ describe('Dispatcher image translation', () => {
     expect(payload.contents[0].parts[1].inlineData).toEqual({
       mimeType: 'image/png',
       data: 'AA==',
+    });
+  });
+
+  // A FormData has no enumerable own properties, so an unsummarized multipart
+  // body serializes into the debug trace as `{}` — the whole request summary
+  // is lost on every OpenAI-compatible edit.
+  test('summarizes the multipart edit body for the debug trace', async () => {
+    setConfigForTesting(
+      baseConfig(
+        'openai',
+        {
+          api_base_url: 'https://api.example.com/v1',
+          api_key: 'openai-key',
+          models: {
+            'gpt-image': {
+              type: 'image',
+              access_via: ['openai-images'],
+            },
+          },
+        },
+        'gpt-image'
+      )
+    );
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ created: 1, data: [{ b64_json: 'AA==' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    const addTransformedRequest = registerSpy(DebugManager.getInstance(), 'addTransformedRequest');
+
+    await new Dispatcher().dispatchImageGenerations({
+      ...request,
+      mask: {
+        type: 'image_url',
+        image_url: { url: 'data:image/png;base64,/w==' },
+        media_type: 'image/png',
+      },
+    });
+
+    expect(addTransformedRequest).toHaveBeenCalledTimes(1);
+    const [requestId, debugPayload] = addTransformedRequest.mock.calls[0] as any[];
+    expect(requestId).toBe('image-request');
+    expect(debugPayload).toEqual({
+      model: 'gpt-image',
+      prompt: 'A watercolor fox',
+      size: '1792x1024',
+      image: 'image/png;[1 bytes]',
+      mask: 'image/png;[1 bytes]',
+    });
+
+    // The wire body still carries the real bytes.
+    const [, options] = fetchMock.mock.calls[0]!;
+    expect(options.body).toBeInstanceOf(FormData);
+    expect(options.body.get('image')).toBeInstanceOf(Blob);
+  });
+
+  test('sends the inpainting mask alongside the reference on the OpenAI edit path', async () => {
+    setConfigForTesting(
+      baseConfig(
+        'openai',
+        {
+          api_base_url: 'https://api.example.com/v1',
+          api_key: 'openai-key',
+          models: {
+            'gpt-image': {
+              type: 'image',
+              access_via: ['openai-images'],
+            },
+          },
+        },
+        'gpt-image'
+      )
+    );
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ created: 1, data: [{ b64_json: 'AA==' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await new Dispatcher().dispatchImageGenerations({
+      ...request,
+      mask: {
+        type: 'image_url',
+        image_url: { url: 'data:image/png;base64,/w==' },
+        media_type: 'image/png',
+      },
+    });
+
+    const [url, options] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.example.com/v1/images/edits');
+    expect(options.body).toBeInstanceOf(FormData);
+    const mask = options.body.get('mask') as Blob;
+    expect(mask).toBeInstanceOf(Blob);
+    expect(new Uint8Array(await mask.arrayBuffer())).toEqual(new Uint8Array([0xff]));
+  });
+
+  test('routes a legacy multipart edit request to the Codex JSON edits endpoint', async () => {
+    setConfigForTesting(codexImagesConfig());
+    registerSpy(OAuthAuthManager.getInstance(), 'getApiKey').mockResolvedValue(CODEX_TOKEN);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ created: 9, data: [{ b64_json: 'AA==' }], output_format: 'png' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const response = await new Dispatcher().dispatchImageEdits({
+      model: 'image_alias',
+      prompt: 'A watercolor fox',
+      image,
+      filename: 'input.png',
+      mimeType: 'image/png',
+      requestId: 'legacy-edit-request',
+      incomingApiType: 'images',
+    });
+
+    expect(response.data).toEqual([{ b64_json: 'AA==', media_type: 'image/png' }]);
+    const [url, options] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://chatgpt.com/backend-api/codex/images/edits');
+    expect(options.headers['Content-Type']).toBe('application/json');
+    expect(options.headers['Authorization']).toBe(`Bearer ${CODEX_TOKEN}`);
+    expect(JSON.parse(options.body)).toEqual({
+      images: [{ image_url: `data:image/png;base64,${image.toString('base64')}` }],
+      model: 'gpt-image-2',
+      prompt: 'A watercolor fox',
+      background: 'auto',
+      quality: 'auto',
+      size: 'auto',
     });
   });
 });

@@ -1,6 +1,6 @@
 import { defineChecker } from '../checker-registry';
 import { z } from 'zod';
-import { OAuthAuthManager } from '../../oauth/oauth-auth-manager';
+import { OAuthAuthManager, type GetApiKeyOptions } from '../../oauth/oauth-auth-manager';
 import { CodexVersionService } from '../../oauth/codex-version-service';
 import type { OAuthProvider } from '../../oauth/oauth-providers';
 import { logger } from '../../../utils/logger';
@@ -25,7 +25,9 @@ interface CodexUsageResponse {
   rate_limit?: CodexRateLimitInfo;
 }
 
-const OPENAI_CODEX_OAUTH_REFRESH_INTERVAL_MS = 8 * 24 * 60 * 60 * 1000;
+// OpenAI Codex access tokens typically have a 1-hour lifetime. Proactively
+// refresh whenever the token will expire within the next 10 minutes.
+export const OPENAI_CODEX_OAUTH_EXPIRY_BUFFER_MS = 10 * 60 * 1000;
 
 interface OAuthCredentialsBlob {
   access_token?: string;
@@ -90,6 +92,67 @@ function buildMeterFromWindow(
   return ctx.allowance({ key, label, unit: 'percentage', used, remaining, ...period, resetsAt });
 }
 
+async function resolveApiKey(
+  ctx: { getOption<T>(key: string, def: T): T; checkerId: string },
+  options?: { forceRefresh?: boolean; signal?: AbortSignal }
+): Promise<string> {
+  const configured = ctx.getOption<string>('apiKey', '').trim();
+  if (configured) return parseAccessToken(configured);
+
+  const provider = ctx.getOption<string>('oauthProvider', 'openai-codex').trim() || 'openai-codex';
+  const oauthAccountId = ctx.getOption<string>('oauthAccountId', '').trim();
+  const authManager = OAuthAuthManager.getInstance();
+  const refreshOptions: GetApiKeyOptions = {
+    refreshIfExpiringWithinMs:
+      provider === 'openai-codex' ? OPENAI_CODEX_OAUTH_EXPIRY_BUFFER_MS : undefined,
+    ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+    ...(options?.signal ? { signal: options.signal } : {}),
+  };
+
+  logger.debug(`resolveApiKey for '${ctx.checkerId}'`);
+
+  let resolvedAuth: string;
+  try {
+    resolvedAuth = oauthAccountId
+      ? await authManager.getApiKey(provider as OAuthProvider, oauthAccountId, refreshOptions)
+      : await authManager.getApiKey(provider as OAuthProvider, undefined, refreshOptions);
+  } catch (err) {
+    if (options?.signal?.aborted || options?.forceRefresh) throw err;
+    await authManager.reload();
+    resolvedAuth = oauthAccountId
+      ? await authManager.getApiKey(provider as OAuthProvider, oauthAccountId, refreshOptions)
+      : await authManager.getApiKey(provider as OAuthProvider, undefined, refreshOptions);
+  }
+  return parseAccessToken(resolvedAuth);
+}
+
+function resolveCodexAccountId(
+  ctx: { getOption<T>(key: string, def: T): T },
+  rawInput: string
+): string | null {
+  const accountClaim = extractChatGPTAccountId(rawInput);
+  if (accountClaim) return accountClaim;
+
+  const configured = ctx.getOption<string>('apiKey', '').trim();
+  if (configured) return null;
+
+  const provider = ctx.getOption<string>('oauthProvider', 'openai-codex').trim() || 'openai-codex';
+  const oauthAccountId = ctx.getOption<string>('oauthAccountId', '').trim();
+  const authManager = OAuthAuthManager.getInstance();
+  const credentials = (
+    oauthAccountId
+      ? authManager.getCredentials(provider as OAuthProvider, oauthAccountId)
+      : authManager.getCredentials(provider as OAuthProvider)
+  ) as Record<string, unknown> | null;
+  const fromCreds =
+    typeof credentials?.accountId === 'string'
+      ? credentials.accountId.trim()
+      : typeof credentials?.chatgpt_account_id === 'string'
+        ? credentials.chatgpt_account_id.trim()
+        : '';
+  return fromCreds || null;
+}
+
 export default defineChecker({
   type: 'openai-codex',
   displayName: 'OpenAI Codex',
@@ -112,79 +175,71 @@ export default defineChecker({
     );
     const timeoutMs = ctx.getOption<number>('timeoutMs', 15000);
 
-    let accessToken: string;
-    let accountId: string | null = null;
-
-    const configuredApiKey = ctx.getOption<string>('apiKey', '').trim();
-    if (configuredApiKey) {
-      accessToken = parseAccessToken(configuredApiKey);
-    } else {
-      const provider =
-        ctx.getOption<string>('oauthProvider', 'openai-codex').trim() || 'openai-codex';
-      const oauthAccountId = ctx.getOption<string>('oauthAccountId', '').trim();
-      const authManager = OAuthAuthManager.getInstance();
-      const refreshOptions =
-        provider === 'openai-codex'
-          ? { refreshIfOlderThanMs: OPENAI_CODEX_OAUTH_REFRESH_INTERVAL_MS }
-          : undefined;
-
-      const rawCreds = (
-        oauthAccountId
-          ? authManager.getCredentials(provider as OAuthProvider, oauthAccountId)
-          : authManager.getCredentials(provider as OAuthProvider)
-      ) as Record<string, unknown> | null;
-      logger.debug(`resolveApiKey for '${ctx.checkerId}'`);
-
-      let oauthApiKey: string;
-      try {
-        oauthApiKey = oauthAccountId
-          ? await authManager.getApiKey(provider as OAuthProvider, oauthAccountId, refreshOptions)
-          : await authManager.getApiKey(provider as OAuthProvider, undefined, refreshOptions);
-      } catch {
-        await authManager.reload();
-        oauthApiKey = oauthAccountId
-          ? await authManager.getApiKey(provider as OAuthProvider, oauthAccountId, refreshOptions)
-          : await authManager.getApiKey(provider as OAuthProvider, undefined, refreshOptions);
-      }
-
-      accessToken = parseAccessToken(oauthApiKey);
-      const credentials = (
-        oauthAccountId
-          ? authManager.getCredentials(provider as OAuthProvider, oauthAccountId)
-          : authManager.getCredentials(provider as OAuthProvider)
-      ) as Record<string, unknown> | null;
-      const fromCreds =
-        typeof credentials?.accountId === 'string'
-          ? credentials.accountId.trim()
-          : typeof credentials?.chatgpt_account_id === 'string'
-            ? credentials.chatgpt_account_id.trim()
-            : '';
-      accountId = fromCreds || null;
-    }
-
-    accountId = accountId ?? extractChatGPTAccountId(accessToken);
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      'User-Agent': userAgent,
-      Version: CodexVersionService.getInstance().getVersion(),
-    };
-    if (accountId) headers['Chatgpt-Account-Id'] = accountId;
-
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), timeoutMs);
 
-    logger.silly(`Requesting usage for '${ctx.checkerId}' from ${endpoint}`);
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers,
-      signal: abortController.signal,
-    }).finally(() => clearTimeout(timeout));
+    let bodyText: string;
+    try {
+      let resolvedKey = await resolveApiKey(ctx, { signal: abortController.signal });
+      let accountId = resolveCodexAccountId(ctx, resolvedKey);
 
-    const bodyText = await response.text();
-    if (!response.ok)
-      throw new Error(`quota request failed with status ${response.status}: ${bodyText}`);
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${resolvedKey}`,
+        'Content-Type': 'application/json',
+        'User-Agent': userAgent,
+        Version: CodexVersionService.getInstance().getVersion(),
+      };
+      if (accountId) headers['Chatgpt-Account-Id'] = accountId;
+
+      logger.silly(`Requesting usage for '${ctx.checkerId}' from ${endpoint}`);
+      let response = await fetch(endpoint, {
+        method: 'GET',
+        headers,
+        signal: abortController.signal,
+      });
+
+      const isOAuth = !ctx.getOption<string>('apiKey', '').trim();
+      if (response.status === 401 && isOAuth) {
+        logger.warn(
+          `OpenAI Codex quota checker: received 401 for '${ctx.checkerId}', attempting reactive force-refresh`
+        );
+        let refreshedKey: string | undefined;
+        try {
+          refreshedKey = await resolveApiKey(ctx, {
+            forceRefresh: true,
+            signal: abortController.signal,
+          });
+        } catch (refreshErr) {
+          if (abortController.signal.aborted) throw refreshErr;
+          logger.warn(
+            `OpenAI Codex quota checker: reactive force-refresh failed for '${ctx.checkerId}': ${refreshErr}`
+          );
+        }
+
+        if (refreshedKey) {
+          resolvedKey = refreshedKey;
+          accountId = resolveCodexAccountId(ctx, resolvedKey);
+          headers.Authorization = `Bearer ${resolvedKey}`;
+          if (accountId) {
+            headers['Chatgpt-Account-Id'] = accountId;
+          } else {
+            delete headers['Chatgpt-Account-Id'];
+          }
+
+          response = await fetch(endpoint, {
+            method: 'GET',
+            headers,
+            signal: abortController.signal,
+          });
+        }
+      }
+
+      bodyText = await response.text();
+      if (!response.ok)
+        throw new Error(`quota request failed with status ${response.status}: ${bodyText}`);
+    } finally {
+      clearTimeout(timeout);
+    }
 
     let data: CodexUsageResponse;
     try {

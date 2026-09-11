@@ -1,9 +1,27 @@
 import { PassThrough } from 'stream';
+import { createParser } from 'eventsource-parser';
 import { logger } from '../../utils/logger';
 import { BaseInspector } from './base';
 import { DebugManager } from '../observability/debug-manager';
 
 const MAX_DEBUG_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+const RESPONSES_TERMINAL_EVENT_TYPES = new Set([
+  'response.completed',
+  'response.failed',
+  'response.incomplete',
+]);
+/** OpenAI-compatible chat/completions streams end with this literal frame. */
+const CHAT_TERMINAL_EVENT_DATA = '[DONE]';
+
+/**
+ * Provider API types whose "raw" stream is a stream of unified chunk OBJECTS
+ * rather than provider SSE bytes. A non-objectMode PassThrough THROWS when an
+ * object is written to it, which would tear down the client's stream, so the
+ * tap must be created in object mode for these:
+ *   - `images`: the auto-bridge (services/dispatch/image-model-bridge.ts)
+ *     synthesizes unified chunks directly, with no provider wire in between.
+ */
+const OBJECT_CHUNK_API_TYPES = new Set(['oauth', 'images']);
 
 export class DebugLoggingInspector extends BaseInspector {
   private debugManager = DebugManager.getInstance();
@@ -16,14 +34,20 @@ export class DebugLoggingInspector extends BaseInspector {
   private totalSize = 0;
   private truncated = false;
   private finalized = false;
+  private terminalEventParser: ReturnType<typeof createParser> | null = null;
 
-  constructor(requestId: string, mode: 'raw' | 'transformed' = 'raw') {
+  constructor(
+    requestId: string,
+    mode: 'raw' | 'transformed' = 'raw',
+    private readonly onTerminal?: () => void
+  ) {
     super(requestId);
     this.mode = mode;
   }
 
   createInspector(providerApiType: string): PassThrough {
     this.providerApiType = providerApiType;
+    this.initializeTerminalEventDetection();
 
     // Capture happens synchronously in the transform hook (i.e. at write()
     // time), NOT in a 'data' listener: 'data' emission for the very first
@@ -32,7 +56,7 @@ export class DebugLoggingInspector extends BaseInspector {
     // With write-time capture, finalize() deterministically sees every chunk
     // written up to the instant it runs.
     const inspector = new PassThrough({
-      ...(providerApiType === 'oauth' ? { objectMode: true } : {}),
+      ...(OBJECT_CHUNK_API_TYPES.has(providerApiType) ? { objectMode: true } : {}),
       transform: (chunk: any, _encoding, callback) => {
         this.captureChunk(chunk);
         callback(null, chunk);
@@ -54,8 +78,6 @@ export class DebugLoggingInspector extends BaseInspector {
       `[Inspector:${this.mode}] Request ${this.requestId} received chunk, length: ${chunk.length || chunk.toString().length}: ${chunk.toString()}`
     );
 
-    if (this.truncated) return;
-
     let chunkStr: string;
     if (typeof chunk === 'string') {
       chunkStr = chunk;
@@ -74,17 +96,67 @@ export class DebugLoggingInspector extends BaseInspector {
       }
     }
 
+    // Terminal detection keeps running even after the debug body is
+    // truncated: a >10MB stream still needs its terminal frame observed so
+    // usage and captures finalize before the client can close. The parser is
+    // fed AFTER the chunk is accumulated so a terminal event finalized during
+    // this feed sees the complete body.
+    if (this.truncated) {
+      this.terminalEventParser?.feed(chunkStr);
+      return;
+    }
+
     const newSize = this.totalSize + chunkStr.length;
 
     if (newSize > MAX_DEBUG_BUFFER_SIZE) {
       this.truncated = true;
       this.bodyChunks.push('\n\n[DEBUG OUTPUT TRUNCATED - Exceeded 10MB limit]');
       logger.warn(`Request ${this.requestId} debug output truncated at ${this.totalSize} bytes`);
+      this.terminalEventParser?.feed(chunkStr);
       return;
     }
 
     this.totalSize = newSize;
     this.bodyChunks.push(chunkStr);
+    this.terminalEventParser?.feed(chunkStr);
+  }
+
+  private initializeTerminalEventDetection(): void {
+    if (this.providerApiType === 'responses') {
+      this.terminalEventParser = createParser({
+        onEvent: (event) => {
+          try {
+            const responseEvent = JSON.parse(event.data);
+            if (RESPONSES_TERMINAL_EVENT_TYPES.has(responseEvent.type)) {
+              this.finalizeOnTerminal();
+            }
+          } catch {
+            // Non-JSON SSE frames cannot be Responses terminal events.
+          }
+        },
+      });
+      return;
+    }
+
+    if (this.providerApiType === 'chat') {
+      this.terminalEventParser = createParser({
+        onEvent: (event) => {
+          if (event.data.trim() === CHAT_TERMINAL_EVENT_DATA) {
+            this.finalizeOnTerminal();
+          }
+        },
+      });
+    }
+  }
+
+  private finalizeOnTerminal(): void {
+    if (this.finalized) return;
+    // OpenAI-compatible chat clients (e.g. OMP) close their connection
+    // immediately after `data: [DONE]`, just as Codex does after
+    // `response.completed`. Finalize before the chunk continues to the client
+    // so the completed response and usage are available during teardown.
+    this.finalize();
+    this.onTerminal?.();
   }
 
   /**
@@ -126,6 +198,12 @@ export class DebugLoggingInspector extends BaseInspector {
         case 'oauth':
           reconstructed = this.reconstructOAuth(rawBody);
           break;
+        // Bridged image output (services/dispatch/image-model-bridge.ts) is
+        // already unified — there is no provider wire format to reconstruct,
+        // and its usage is recorded from the client-facing transformed
+        // snapshot instead. No-op rather than a spurious "Unknown
+        // providerApiType" warning on every bridged stream.
+        case 'images':
         case 'unknown':
           break;
         default:

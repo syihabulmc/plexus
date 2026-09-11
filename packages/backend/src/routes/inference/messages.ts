@@ -105,7 +105,7 @@ export async function registerMessagesRoute(
 
       const abortController = new AbortController();
       const { signal: dispatchSignal, resolveTimeoutMs } = wireUpstreamTimeout(abortController);
-      earlyDisconnect = wireEarlyDisconnectDetection(request, abortController);
+      earlyDisconnect = wireEarlyDisconnectDetection(request, abortController, requestId);
       const stallDetectionResult = wireStallDetection(abortController, getGlobalStallConfig());
       const unifiedResponse = await dispatcher.dispatch(
         unifiedRequest,

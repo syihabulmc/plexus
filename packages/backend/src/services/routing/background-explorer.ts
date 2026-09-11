@@ -1,9 +1,16 @@
 import { logger } from '../../utils/logger';
-import { getConfig, ModelTargetGroup, SelectorType } from '../../config';
+import {
+  getConfig,
+  ModelConfig,
+  ModelTargetGroup,
+  ProviderConfig,
+  SelectorType,
+} from '../../config';
 import { CooldownManager } from '../runtime/cooldown-manager';
 import { ProbeService } from '../probes/probe-service';
 
 type TargetKey = `${string}:${string}`;
+type ModelKind = NonNullable<ModelConfig['type']>;
 
 interface TargetState {
   lastProbedAt: number;
@@ -11,6 +18,26 @@ interface TargetState {
 }
 
 const PERFORMANCE_SELECTORS: SelectorType[] = ['latency', 'performance', 'e2e_performance'];
+
+/**
+ * Declared `type` of a concrete target: the provider's model config first,
+ * the alias-level declaration as the fallback. `undefined` when neither
+ * declares one — an untyped model is a text model.
+ *
+ * `models` may be the shorthand `string[]` form, which carries no types.
+ */
+function declaredModelType(
+  providerCfg: ProviderConfig,
+  model: string,
+  aliasType: ModelKind | undefined
+): ModelKind | undefined {
+  const models = providerCfg.models;
+  if (models && !Array.isArray(models)) {
+    const declared = models[model]?.type;
+    if (declared) return declared;
+  }
+  return aliasType;
+}
 
 /**
  * BackgroundExplorer keeps performance data (TTFT / TPS / E2E TPS) fresh by
@@ -54,9 +81,12 @@ export class BackgroundExplorer {
    * `lastProbedAt` is older than the staleness threshold, that is healthy
    * (not on cooldown), and that is not already in flight, enqueue a probe.
    *
+   * Non-text targets are skipped: every background probe is chat-shaped (see
+   * probe-request.ts), so `aliasType` is passed in only to recognise them.
+   *
    * Non-blocking. Returns immediately. Safe to call on every live request.
    */
-  maybeTrigger(group: ModelTargetGroup): void {
+  maybeTrigger(group: ModelTargetGroup, aliasType?: ModelKind): void {
     const config = getConfig();
     const bg = config.backgroundExploration;
     if (!bg || bg.enabled !== true) {
@@ -79,6 +109,18 @@ export class BackgroundExplorer {
       if (target.alias || !target.provider || !target.model) continue;
       const providerCfg = providers[target.provider];
       if (!providerCfg || providerCfg.enabled === false) continue;
+
+      // Probes are CHAT-shaped, so a non-text target can never answer one.
+      // For an `image` target that is not merely wasteful: the chat-to-image
+      // bridge turns a chat-shaped request naming an image model into a real
+      // image generation, so every staleness tick would bill an image.
+      const modelType = declaredModelType(providerCfg, target.model, aliasType);
+      if (modelType && modelType !== 'text') {
+        logger.debug(
+          `BackgroundExplorer: skipping ${target.provider}/${target.model} — model type '${modelType}' is not probeable with a chat probe`
+        );
+        continue;
+      }
 
       const key = this.keyFor(target.provider, target.model);
       let st = this.state.get(key);

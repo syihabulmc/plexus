@@ -27,6 +27,11 @@ export class OpenRouterImageTransformer implements ImageGenerationTransformer {
         'OpenRouter image targets do not support the legacy style or user fields'
       );
     }
+    // OpenRouter's image API has no mask channel; dropping it would silently
+    // repaint the whole image, so refuse instead.
+    if (request.mask !== undefined) {
+      throw new ImageRequestValidationError('OpenRouter image targets do not support mask images');
+    }
 
     const payload: Record<string, any> = {
       model: request.model,

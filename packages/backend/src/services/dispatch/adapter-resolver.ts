@@ -1,6 +1,6 @@
 import type { ResolvedAdapter } from '../../types/provider-adapter';
 import type { RouteResult } from '../routing/router';
-import type { AdapterEntry } from '../../config';
+import { isOAuthPlaceholderUrl, type AdapterEntry } from '../../config';
 import { ADAPTER_REGISTRY } from '../../transformers/adapters/index';
 import { normalizeAnthropicToolIdsAdapter } from '../../transformers/adapters/normalize-anthropic-tool-ids.adapter';
 import { stripUnsupportedToolSearchAdapter } from '../../transformers/adapters/strip-unsupported-tool-search.adapter';
@@ -171,7 +171,7 @@ export function isAnthropicTargetProvider(route: RouteResult, effectiveApiType?:
     url.toLowerCase()
   );
   if (lowered.some((url) => url.includes('anthropic.com'))) return true;
-  const isOAuth = lowered.some((url) => url.startsWith('oauth://'));
+  const isOAuth = lowered.some(isOAuthPlaceholderUrl);
   return isOAuth && (route.config.oauth_provider || route.provider) === 'anthropic';
 }
 

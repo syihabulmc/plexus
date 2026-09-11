@@ -14,11 +14,12 @@ import { ConcurrencyTracker } from '../runtime/concurrency-tracker';
 import { SelectorFactory } from './selectors/factory';
 import { EnrichedModelTarget } from './selectors/base';
 import { StickySessionManager } from './sticky-session-manager';
-import { getApiBaseType, isApiSubtype, normalizeApiAccessList } from '../../utils/api-format';
-
-function isImageApiType(apiType: string): boolean {
-  return ['chat', 'gemini', 'openai-images', 'openrouter-images'].includes(getApiBaseType(apiType));
-}
+import {
+  getApiBaseType,
+  isApiSubtype,
+  isImageTargetApiType,
+  normalizeApiAccessList,
+} from '../../utils/api-format';
 
 export interface RouteResult {
   provider: string;
@@ -219,7 +220,7 @@ async function filterGroupTargets(
         modelSpecificTypes && modelSpecificTypes.length > 0
           ? normalizeApiAccessList(modelSpecificTypes)
           : providerTypes;
-      const supportsImageProtocol = availableTypes.some((type) => isImageApiType(type));
+      const supportsImageProtocol = availableTypes.some((type) => isImageTargetApiType(type));
 
       return supportsImageProtocol;
     });
@@ -263,7 +264,7 @@ async function filterGroupTargets(
       return availableTypes.some(
         (t) =>
           t.toLowerCase() === normalizedIncoming ||
-          (normalizedIncoming === 'images' && isImageApiType(t))
+          (normalizedIncoming === 'images' && isImageTargetApiType(t))
       );
     });
   };
@@ -452,7 +453,7 @@ async function buildGroupCandidates(
     }
   }
 
-  BackgroundExplorer.getInstance()?.maybeTrigger(group);
+  BackgroundExplorer.getInstance()?.maybeTrigger(group, alias.type);
 
   return merged;
 }
@@ -629,7 +630,7 @@ export class Router {
 
         if (candidates.length === 0) continue;
 
-        BackgroundExplorer.getInstance()?.maybeTrigger(group);
+        BackgroundExplorer.getInstance()?.maybeTrigger(group, alias.type);
 
         const deduped = dedupeCandidates(candidates);
         const target = deduped[0]!;

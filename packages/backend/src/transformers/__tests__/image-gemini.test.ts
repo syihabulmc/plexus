@@ -68,4 +68,18 @@ describe('GeminiImageTransformer', () => {
       total_tokens: 20,
     });
   });
+
+  test('rejects an inpainting mask instead of silently dropping it', async () => {
+    await expect(
+      transformer.transformGenerationRequest({
+        model: 'gemini-2.5-flash-image',
+        prompt: 'Repaint the masked area',
+        input_references: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }],
+        mask: { type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('mask'),
+      routingContext: expect.objectContaining({ statusCode: 400 }),
+    });
+  });
 });

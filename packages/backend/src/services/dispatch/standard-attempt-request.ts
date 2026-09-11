@@ -6,6 +6,8 @@ import type { RetryAttemptRecord } from './dispatcher-types';
 import type { StallConfig } from '../inspectors/stall-inspector';
 import { CooldownManager } from '../runtime/cooldown-manager';
 import type { RequestManagerHost } from './request-manager';
+import { refreshOAuthRoute } from './request-payload-builder';
+import { isOAuthRoute } from '../oauth/oauth-dispatcher';
 import {
   createAdvisorResultStripState,
   createLiteToolStripState,
@@ -121,8 +123,8 @@ export async function executeStandardAttempt(
   let effectiveStallConfig = pristineStallConfig;
 
   const incomingApi = currentRequest.incomingApiType || 'unknown';
-  const url = host.buildRequestUrl(route, transformer, requestWithTargetModel, targetApiType);
-  const headers = host.setupHeaders(route, targetApiType, requestWithTargetModel);
+  let url = host.buildRequestUrl(route, transformer, requestWithTargetModel, targetApiType);
+  let headers = host.setupHeaders(route, targetApiType, requestWithTargetModel);
 
   logger.info(
     `Dispatching ${currentRequest.model} to ${route.provider}:${route.model} ${incomingApi} <-> ${transformer.name}`
@@ -141,6 +143,7 @@ export async function executeStandardAttempt(
   const thinkingStripState = createThinkingSignatureStripState();
   const advisorStripState = createAdvisorResultStripState();
   const liteToolStripState = createLiteToolStripState();
+  let oauthRefreshAttempted = false;
 
   // Looped so a strip-and-retry can redo the fetch against the SAME target
   // without returning to the caller's failover loop — failing over would
@@ -261,6 +264,34 @@ export async function executeStandardAttempt(
 
     if (!response.ok) {
       const errorText = await response.text();
+
+      // Reactive OAuth refresh: an upstream 401 from an OAuth provider indicates
+      // that the access token was revoked or expired upstream before our local
+      // timestamp. Force a fresh token exchange and retry the same target once.
+      if (response.status === 401 && !oauthRefreshAttempted && isOAuthRoute(route, targetApiType)) {
+        oauthRefreshAttempted = true;
+        logger.warn(
+          `OAuth: Upstream 401 from ${route.provider}/${route.model} — attempting reactive token refresh and retry`
+        );
+        try {
+          const refreshed = await refreshOAuthRoute(route, targetApiType, attemptTimeout.signal);
+          if (refreshed) {
+            url = host.buildRequestUrl(route, transformer, requestWithTargetModel, targetApiType);
+            headers = host.setupHeaders(route, targetApiType, requestWithTargetModel);
+            logger.info(
+              `OAuth: Successfully refreshed credentials for ${route.provider}/${route.model} after 401 — retrying attempt`
+            );
+            continue;
+          }
+        } catch (refreshErr: any) {
+          if (attemptTimeout.signal.aborted || signal?.aborted) {
+            throw refreshErr;
+          }
+          logger.error(
+            `OAuth: Failed to refresh credentials for ${route.provider}/${route.model} after 401: ${refreshErr?.message ?? refreshErr}`
+          );
+        }
+      }
 
       // Reactive auto-compat: a 400 can name a problem that failing over
       // won't fix — every remaining target would reject the same request

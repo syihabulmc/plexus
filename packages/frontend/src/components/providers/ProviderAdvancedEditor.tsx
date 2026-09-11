@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { isOAuthPlaceholderUrl } from '@plexus/shared';
 import { ChevronDown, ChevronRight, Info, Plus, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { DebouncedInput } from '../ui/DebouncedInput';
@@ -453,10 +454,10 @@ export function ProviderAdvancedEditor({
                   // base URL containing anthropic.com IS a Messages provider by
                   // inference (getProviderTypes), so it counts as-is.
                   const isAnthropicUrl = (url: string) => {
-                    const lowered = url.toLowerCase();
+                    const lowered = url.trim().toLowerCase();
                     return (
                       lowered.includes('anthropic.com') ||
-                      (lowered.startsWith('oauth://') &&
+                      (isOAuthPlaceholderUrl(url) &&
                         (editingProvider.oauthProvider || editingProvider.id) === 'anthropic')
                     );
                   };

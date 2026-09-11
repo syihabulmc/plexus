@@ -200,6 +200,15 @@ export interface UnifiedUsage {
   reasoning_tokens: number;
   cached_tokens: number;
   cache_creation_tokens: number;
+  /**
+   * Image-token breakdowns reported by providers that bill images separately
+   * (OpenAI Responses `*_tokens_details.image_tokens`, emitted when the
+   * built-in `image_generation` tool runs). Left UNDEFINED when the provider
+   * reports no such detail so downstream payloads stay byte-identical —
+   * `undefined` means "not reported", which is distinct from a reported 0.
+   */
+  input_image_tokens?: number;
+  output_image_tokens?: number;
 }
 
 /**
@@ -572,6 +581,8 @@ export interface UnifiedImageGenerationRequest {
   seed?: number;
   stream?: boolean;
   input_references?: UnifiedImageReference[];
+  /** Optional inpainting mask, kept distinct from an ordinary reference image. */
+  mask?: UnifiedImageReference;
   provider?: UnifiedImageProviderPreferences;
   user?: string;
   // Internal tracking
@@ -610,7 +621,12 @@ export interface UnifiedImageGenerationResponse {
   rawResponse?: any;
 }
 
-// Unified Image Edit Request
+/**
+ * @deprecated Image edits now travel on `UnifiedImageGenerationRequest`, where
+ * the uploaded image is `input_references[0]` and the optional inpainting
+ * mask is `mask`. Only the deprecated `Dispatcher.dispatchImageEdits` facade
+ * still accepts this shape; convert with `editRequestToGenerationRequest`.
+ */
 export interface UnifiedImageEditRequest {
   requestId?: string;
   model: string;
@@ -632,7 +648,10 @@ export interface UnifiedImageEditRequest {
   metadata?: Record<string, any> & { plexus_metadata?: PlexusMetadata };
 }
 
-// Unified Image Edit Response
+/**
+ * @deprecated Structurally identical to `UnifiedImageGenerationResponse`, which
+ * every image dispatch now returns.
+ */
 export interface UnifiedImageEditResponse {
   created: number;
   data: Array<{

@@ -31,3 +31,24 @@ export function getApiSubtype(apiType: string): string | undefined {
 export function isApiSubtype(apiType: string | undefined): boolean {
   return !!apiType && getApiSubtype(apiType) !== undefined;
 }
+
+/**
+ * Target protocols able to serve an incoming `images` request. Providers
+ * advertise these through `access_via` (or have them inferred from
+ * `api_base_url`); the router and the per-target API type selection both
+ * filter against this single list.
+ */
+export const IMAGE_TARGET_API_TYPES = [
+  'chat',
+  'gemini',
+  'openai-images',
+  'openrouter-images',
+  'codex-images',
+] as const;
+
+const IMAGE_TARGET_API_TYPE_SET: ReadonlySet<string> = new Set(IMAGE_TARGET_API_TYPES);
+
+/** True when `apiType`'s base type can serve an incoming `images` request. */
+export function isImageTargetApiType(apiType: string): boolean {
+  return IMAGE_TARGET_API_TYPE_SET.has(getApiBaseType(apiType));
+}

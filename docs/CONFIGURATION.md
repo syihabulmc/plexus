@@ -138,11 +138,18 @@ Some providers support multiple API formats (OpenAI chat, Anthropic messages, em
 | `chat` | OpenAI-compatible chat completions |
 | `messages` | Anthropic Claude Messages API |
 | `embeddings` | OpenAI-compatible embeddings (Gemini providers auto-transformed) |
-| `image` | Image generation (DALL-E, etc.) |
+| `openai-images` | OpenAI-compatible image generation and edits (`/images/generations`, `/images/edits`) |
+| `openrouter-images` | Dedicated OpenRouter image endpoint (`/images`) |
+| `codex-images` | ChatGPT-subscription Codex Images backend; only valid on an `openai-codex` OAuth provider |
 | `transcriptions` | Speech-to-text (Whisper) |
 | `speech` | Text-to-speech |
 
 When combined with `priority: api_match` on a model alias, Plexus prefers providers that natively support the incoming API format.
+
+An incoming `/v1/images` request can also be served by a `chat` or `gemini` target when the provider
+model declares it through `access_via` — Plexus picks the image transformer from the resolved target
+API type, not from the incoming request shape. The `api_base_url` map form must hold real URLs; an
+OAuth provider declares `oauth://` through the string form instead.
 
 ### OAuth Providers
 
@@ -166,6 +173,69 @@ Plexus supports OAuth-backed providers via the [pi-ai](https://www.npmjs.com/pac
 - Set OAuth Provider if the provider key differs from pi-ai's expected ID
 
 Once configured, log in via the Admin UI to authorize Plexus. Tokens are stored encrypted (when `ENCRYPTION_KEY` is set) and auto-refreshed.
+
+#### Codex Image Models
+
+An `openai-codex` OAuth provider can also serve image generation through the ChatGPT Images backend.
+Mark the provider model `type: image` and give it `access_via: ["codex-images"]`. That is the only
+image protocol an OAuth route accepts; any other image target on an OAuth provider is rejected with a
+400.
+
+```yaml
+providers:
+  codex:
+    api_base_url: "oauth://"
+    api_key: "oauth"
+    oauth_provider: "openai-codex"
+    oauth_account: "personal"
+    models:
+      gpt-5.5: {}
+      gpt-image-2:
+        type: image
+        access_via: ["codex-images"]
+        pricing: { source: per_request, amount: 0 }
+        extraBody: { quality: low }
+      gpt-image-2.5-flare:
+        type: image
+        access_via: ["codex-images"]
+models:
+  codex-image:
+    type: image
+    targets: [{ provider: codex, model: gpt-image-2 }]
+```
+
+Image generation on a ChatGPT subscription is not billed per token, so give these models
+`pricing` with `source: per_request` and `amount: 0`. Usage records then carry a real cost of zero
+instead of a token-rate estimate.
+
+`extraBody` is merged **over** the built image payload — provider first, then provider model, then
+alias, with later entries winning — so its values override any matching field the client sent, they
+do not merely fill in unset ones. The `extraBody: { quality: low }` above pins every request on this
+model to `quality: low`, including one that asked for `quality: high`. Use it to enforce a setting,
+and leave it out when clients should be able to choose.
+
+The Codex target accepts `size`, `n`, `quality`, and `background`, and returns base64 image data. It
+rejects `response_format: "url"`, `output_format`, `output_compression`, `seed`, `style`, `user`, and
+`mask` with a 400, and `stream: true` with a 501. Requests carrying reference images become Codex
+edits, with at most five references per request.
+
+#### Reaching an Image Model from a Chat Client
+
+An alias with `type: image` also answers chat-shaped requests. A request on `/v1/chat/completions`,
+`/v1/responses`, `/v1/messages`, the Gemini surface, or `/v1/completions` whose model resolves to an
+image model is turned into an image generation: the last user message becomes the prompt, that
+message's attached images become edit references, and `n` is `1`. Size, quality, background, and
+output format stay unset, so provider/model/alias `extraBody` still decides them.
+
+Responses-format clients receive native `image_generation_call` output items; chat, Anthropic
+Messages, Gemini, Ollama, and legacy Completions clients receive a markdown data URI. Routing, key
+access policy, quota, cooldown, failover, and usage recording are the same as for
+`/v1/images/generations`.
+
+Set `type: image` on the **alias** when its targets are not uniformly image models: an alias that
+fans out across image and non-image targets with no alias-level type is left as an ordinary chat
+request, and Plexus logs a warning naming the alias. An explicit `image_generation` tool on an
+ordinary chat model is unaffected — detection never reads the request's tools.
 
 ### Registry-Aware Compatibility
 

@@ -10,6 +10,8 @@ import type { RequestManagerHost } from '../request-manager';
 import type { RouteResult } from '../../routing/router';
 import type { UnifiedChatRequest } from '../../../types/unified';
 import type { StallConfig } from '../../inspectors/stall-inspector';
+import { NATIVE_OAUTH_STASH } from '../request-payload-builder';
+import { OAuthAuthManager } from '../../oauth/oauth-auth-manager';
 
 function makeStallConfig(overrides: Partial<StallConfig> = {}): StallConfig {
   return {
@@ -81,6 +83,7 @@ function makeHost(overrides: Partial<RequestManagerHost> = {}): RequestManagerHo
     buildRequestUrl: vi.fn(() => 'https://example.test/v1/chat/completions'),
     buildTimeoutError: vi.fn(() => new Error('timeout')),
     createAttemptTimeout: vi.fn(),
+    dispatchImageGenerations: vi.fn(async () => ({}) as any),
     emitRoutingUpdate: vi.fn(),
     executeProviderRequest: vi.fn(),
     formatFailureReason: vi.fn((error: any) => error?.message ?? 'error'),
@@ -349,6 +352,151 @@ describe('executeStandardAttempt — thinking-signature strip-and-retry', () => 
       'chat',
       true
     );
+  });
+
+  it('reactively force-refreshes OAuth credentials and retries the same target on 401', async () => {
+    const route: RouteResult = {
+      provider: 'codexgo',
+      model: 'gpt-5.6-luna',
+      config: {
+        api_base_url: 'oauth://',
+        oauth_provider: 'openai-codex',
+        oauth_account: 'codexgo',
+      } as any,
+    } as RouteResult;
+
+    (route as any)[NATIVE_OAUTH_STASH] = {
+      url: 'https://chatgpt.com/backend-api/codex/responses',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer old-token',
+        'chatgpt-account-id': 'acct-old',
+      },
+      body: { model: 'gpt-5.6-luna' },
+      reverseResponseFrame: (f: string) => f,
+    };
+
+    const authManager = OAuthAuthManager.getInstance();
+    const getApiKeySpy = registerSpy(authManager, 'getApiKey').mockResolvedValue('new-token');
+
+    const executeProviderRequest = vi
+      .fn()
+      .mockImplementationOnce(
+        async () => new Response('{"error":{"code":"token_expired"}}', { status: 401 })
+      )
+      .mockImplementationOnce(async () => new Response('{"id":"resp_ok"}', { status: 200 }));
+    const handleNonStreamingResponse = vi.fn(async () => ({ content: 'success' }) as any);
+    const handleProviderError = vi.fn();
+    const host = makeHost({
+      executeProviderRequest,
+      handleNonStreamingResponse,
+      handleProviderError,
+      buildRequestUrl: vi.fn(() => (route as any)[NATIVE_OAUTH_STASH].url),
+      setupHeaders: vi.fn(() => ({ ...(route as any)[NATIVE_OAUTH_STASH].headers })),
+    });
+
+    const result = await executeStandardAttempt(
+      makeContext(host, { model: 'gpt-5.6-luna' }, { route, targetApiType: 'responses' })
+    );
+
+    expect(result.outcome).toBe('success');
+    expect(executeProviderRequest).toHaveBeenCalledTimes(2);
+    expect(getApiKeySpy).toHaveBeenCalledWith('openai-codex', 'codexgo', {
+      forceRefresh: true,
+      signal: expect.anything(),
+    });
+    // First call sent old token
+    expect(executeProviderRequest.mock.calls[0]![1].Authorization).toBe('Bearer old-token');
+    // Second call sent new token
+    expect(executeProviderRequest.mock.calls[1]![1].Authorization).toBe('Bearer new-token');
+    // Error handler was not called (no cooldown)
+    expect(handleProviderError).not.toHaveBeenCalled();
+  });
+
+  it('bounds 401 retry to a single attempt and fails over if retry also returns 401', async () => {
+    const route: RouteResult = {
+      provider: 'codexgo',
+      model: 'gpt-5.6-luna',
+      config: {
+        api_base_url: 'oauth://',
+        oauth_provider: 'openai-codex',
+        oauth_account: 'codexgo',
+      } as any,
+    } as RouteResult;
+
+    (route as any)[NATIVE_OAUTH_STASH] = {
+      url: 'https://chatgpt.com/backend-api/codex/responses',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer old-token',
+      },
+      body: { model: 'gpt-5.6-luna' },
+      reverseResponseFrame: (f: string) => f,
+    };
+
+    const authManager = OAuthAuthManager.getInstance();
+    registerSpy(authManager, 'getApiKey').mockResolvedValue('new-token');
+
+    const executeProviderRequest = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response('{"error":{"code":"token_expired"}}', { status: 401 })
+      );
+    const handleProviderError = vi.fn(async () => {
+      throw new Error('HTTP 401: Unauthorized');
+    });
+    const host = makeHost({
+      executeProviderRequest,
+      handleProviderError,
+      buildRequestUrl: vi.fn(() => (route as any)[NATIVE_OAUTH_STASH].url),
+      setupHeaders: vi.fn(() => ({ ...(route as any)[NATIVE_OAUTH_STASH].headers })),
+    });
+
+    await expect(
+      executeStandardAttempt(
+        makeContext(host, { model: 'gpt-5.6-luna' }, { route, targetApiType: 'responses' })
+      )
+    ).rejects.toThrow('HTTP 401: Unauthorized');
+
+    // Initial attempt + exactly 1 retry
+    expect(executeProviderRequest).toHaveBeenCalledTimes(2);
+    expect(handleProviderError).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not attempt OAuth refresh on 401 for non-OAuth routes', async () => {
+    const route: RouteResult = {
+      provider: 'openai',
+      model: 'gpt-4o',
+      config: {
+        api_base_url: 'https://api.openai.com/v1',
+      } as any,
+    } as RouteResult;
+
+    const authManager = OAuthAuthManager.getInstance();
+    const getApiKeySpy = registerSpy(authManager, 'getApiKey');
+
+    const executeProviderRequest = vi
+      .fn()
+      .mockImplementationOnce(
+        async () => new Response('{"error":"invalid_api_key"}', { status: 401 })
+      );
+    const handleProviderError = vi.fn(async () => {
+      throw new Error('HTTP 401: Invalid API key');
+    });
+    const host = makeHost({
+      executeProviderRequest,
+      handleProviderError,
+    });
+
+    await expect(
+      executeStandardAttempt(
+        makeContext(host, { model: 'gpt-4o' }, { route, targetApiType: 'chat' })
+      )
+    ).rejects.toThrow('HTTP 401: Invalid API key');
+
+    expect(executeProviderRequest).toHaveBeenCalledTimes(1);
+    expect(getApiKeySpy).not.toHaveBeenCalled();
+    expect(handleProviderError).toHaveBeenCalledTimes(1);
   });
 });
 

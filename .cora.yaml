@@ -1,9 +1,9 @@
 profile: clean-code
 
 llm:
-  temperature: 0
-  max_tokens: 4096
-  timeout: 600
+  temperature: 1
+  max_tokens: 32768
+  timeout: 300
   cache_ttl: 1440
 
 review:
@@ -22,3 +22,9 @@ focus:
   - security
   - bugs
   - maintainability
+
+ignore:
+  files:
+    - "**/__tests__/**"
+    - "**/*.test.ts"
+    - "**/*.spec.ts"

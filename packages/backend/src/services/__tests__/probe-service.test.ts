@@ -246,4 +246,67 @@ describe('ProbeService', () => {
     expect(result.success).toBe(true);
     expect(cancelSpy).toHaveBeenCalledTimes(1);
   });
+
+  test('images probe sends only model/prompt/n so every image target accepts it', async () => {
+    const { usageStorage, dispatcher } = makeMocks();
+    (dispatcher.dispatchImageGenerations as any).mockResolvedValueOnce({
+      created: Date.now(),
+      data: [{ b64_json: 'aGk=' }],
+      plexus: {
+        provider: 'p1',
+        model: 'm1',
+        apiType: 'images',
+        canonicalModel: 'm1',
+        attemptCount: 1,
+      },
+    });
+
+    const svc = new ProbeService(dispatcher, usageStorage);
+    const result = await svc.runProbe({
+      provider: 'p1',
+      model: 'm1',
+      apiType: 'images',
+      source: 'manual',
+    });
+
+    expect(dispatcher.dispatchImageGenerations).toHaveBeenCalledTimes(1);
+    const dispatched = (dispatcher.dispatchImageGenerations as any).mock.calls[0][0];
+    expect(dispatched.model).toBe('direct/p1/m1');
+    expect(dispatched.prompt).toEqual(expect.any(String));
+    expect(dispatched.n).toBe(1);
+    // Codex Images rejects `response_format: 'url'` outright and does not
+    // render 256x256, so the probe must not send either field.
+    expect(dispatched).not.toHaveProperty('response_format');
+    expect(dispatched).not.toHaveProperty('size');
+    expect(Object.keys(dispatched.originalBody).sort()).toEqual(['model', 'n', 'prompt']);
+
+    expect(result.success).toBe(true);
+    expect(result.response).toBe('Success (1 image created)');
+  });
+
+  test('images probe reports how many images came back', async () => {
+    const { usageStorage, dispatcher } = makeMocks();
+    (dispatcher.dispatchImageGenerations as any).mockResolvedValueOnce({
+      created: Date.now(),
+      data: [{ b64_json: 'aGk=' }, { b64_json: 'aGk=' }],
+      plexus: {
+        provider: 'p1',
+        model: 'm1',
+        apiType: 'images',
+        canonicalModel: 'm1',
+        attemptCount: 1,
+      },
+    });
+
+    const svc = new ProbeService(dispatcher, usageStorage);
+    const result = await svc.runProbe({
+      provider: 'p1',
+      model: 'm1',
+      apiType: 'images',
+      source: 'manual',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.response).toBe('Success (2 images created)');
+  });
 });

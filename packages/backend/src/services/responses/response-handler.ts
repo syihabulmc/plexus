@@ -416,10 +416,14 @@ export async function handleResponse(
     }
 
     // TAP THE TRANSFORMED STREAM for debugging
-    // This captures what is actually sent to the client
+    // This captures what is actually sent to the client. The terminal
+    // callback fires lazily (when the client stream emits its terminal
+    // frame), by which point usageInspector below is assigned.
+    let usageInspector: UsageInspector;
     const transformedDebugLogging = new DebugLoggingInspector(
       usageRecord.requestId!,
-      'transformed'
+      'transformed',
+      () => usageInspector.finalize()
     );
     const transformedLogInspector = transformedDebugLogging.createInspector(apiType);
 
@@ -435,16 +439,7 @@ export async function handleResponse(
 
     finalClientStream = finalClientStream.pipeThrough(transformedTapStream);
 
-    // Standard SSE headers to prevent buffering and timeouts
-    reply.header('Content-Type', 'text/event-stream');
-    reply.header('Cache-Control', 'no-cache');
-    reply.header('Connection', 'keep-alive');
-
-    /**
-     * Build the linear stream pipeline.
-     */
-
-    const usageInspector = new UsageInspector(
+    usageInspector = new UsageInspector(
       usageRecord.requestId!,
       usageStorage,
       usageRecord,
@@ -456,8 +451,19 @@ export async function handleResponse(
       apiType,
       originalRequest,
       quotaEnforcer,
-      keyName
+      keyName,
+      rawDebugLogging,
+      transformedDebugLogging
     );
+
+    // Standard SSE headers to prevent buffering and timeouts
+    reply.header('Content-Type', 'text/event-stream');
+    reply.header('Cache-Control', 'no-cache');
+    reply.header('Connection', 'keep-alive');
+
+    /**
+     * Build the linear stream pipeline.
+     */
 
     // Convert Web Stream to Node Stream for piping
     const nodeStream = Readable.fromWeb(finalClientStream as any);
@@ -513,18 +519,13 @@ export async function handleResponse(
     // request.signal abort on disconnect. But Fastify runs on node:http, not
     // Bun.serve(), so we can't use that here without a much larger refactor.
     //
-    // THE SOLUTION — bunHandle.closed
-    // --------------------------------
-    // Bun's Node.js Socket wraps an internal Bun TCP socket handle. It is stored
-    // under Symbol(handle) on the Socket object. This handle has a .closed boolean
-    // property that transitions false → true when the underlying TCP connection
-    // closes, even when all the Node.js-layer signals above are broken.
+    // DEFERRED SOCKET-CLOSE SIGNAL — bunHandle.closed
+    // -------------------------------------------------
+    // Bun's Node.js Socket exposes its internal TCP handle under Symbol(handle).
+    // Its .closed flag is useful telemetry, but Codex Responses Lite traffic has
+    // shown that it is not reliable enough to abort an upstream stream by itself.
+    // We log the observation and wait for a confirmed stream error or timeout.
     //
-    // Discovery: we enumerated Object.getOwnPropertySymbols() on the Socket at
-    // runtime, found Symbol(handle), and verified with polling tests that its
-    // .closed property updates correctly within ~250ms of a client disconnect.
-    //
-    // If Bun ever fixes the node:http disconnect signals, we can simplify this.
     // Track: https://github.com/oven-sh/bun/issues/25919
     //        https://github.com/oven-sh/bun/issues/14697
     //
@@ -570,6 +571,7 @@ export async function handleResponse(
       ? Object.getOwnPropertySymbols(rawSocket).find((s) => s.toString() === 'Symbol(handle)')
       : undefined;
     const bunHandle = symHandle ? (rawSocket as any)[symHandle] : null;
+    const deferSocketClose = usageRecord.incomingApiType === 'responses:lite';
 
     const onDisconnect = (source: string) => {
       if (disconnected) return;
@@ -586,7 +588,7 @@ export async function handleResponse(
         source === 'stall' ||
         (abortController?.signal?.reason?.name === 'TimeoutError' &&
           abortController?.signal?.reason?.message?.includes('stalled'));
-      logger.debug(
+      logger.info(
         `${isStall ? 'Stream stalled' : isTimeout ? 'Upstream timeout' : 'Client disconnected'} for request ${usageRecord.requestId} (detected via ${source}), aborting upstream`
       );
       const timeoutErr = isStall
@@ -645,10 +647,22 @@ export async function handleResponse(
         once: true,
       });
 
-      // Poll bunHandle.closed every 250ms — the only reliable client-disconnect
-      // signal available in Bun's node:http layer for POST requests (see above).
+      // Record a socket-close observation, but do not abort on it alone.
       disconnectPoll = setInterval(() => {
-        if (bunHandle?.closed) onDisconnect('bunHandle.closed');
+        if (bunHandle?.closed) {
+          if (deferSocketClose) {
+            logger.info(
+              `Socket close observed for request ${usageRecord.requestId} ` +
+                '(source=bunHandle.closed); deferring upstream cancellation'
+            );
+            if (disconnectPoll) {
+              clearInterval(disconnectPoll);
+              disconnectPoll = null;
+            }
+          } else {
+            onDisconnect('bunHandle.closed');
+          }
+        }
         if (pipeline.destroyed || pipeline.readableEnded) {
           if (disconnectPoll) {
             clearInterval(disconnectPoll);

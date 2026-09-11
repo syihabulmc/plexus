@@ -1,4 +1,9 @@
-import type { UnifiedChatRequest, UnifiedChatResponse } from '../../types/unified';
+import type {
+  UnifiedChatRequest,
+  UnifiedChatResponse,
+  UnifiedImageGenerationRequest,
+  UnifiedImageGenerationResponse,
+} from '../../types/unified';
 import { getConfig } from '../../config';
 import { logger } from '../../utils/logger';
 import { StickySessionManager } from '../routing/sticky-session-manager';
@@ -11,6 +16,7 @@ import { enforceContextLimit } from '../models/enforce-limits';
 import { getGlobalStallConfig, resolveStallConfig } from '../../utils/stall';
 import { preprocessVisionRequest } from '../vision/vision-request-preprocessor';
 import { resolveRouteCandidates } from '../routing/route-candidates';
+import { bridgeChatToImageGeneration, isImageModelRoute } from './image-model-bridge';
 import { executeStandardAttempt } from './standard-attempt-request';
 import { isNativeOAuthRoute } from './request-payload-builder';
 import { isClaudeMaskingApiKeyRoute } from '../oauth/oauth-dispatcher';
@@ -37,6 +43,12 @@ export interface RequestManagerHost {
   buildRequestUrl(...args: any[]): string;
   buildTimeoutError(...args: any[]): Error;
   createAttemptTimeout(...args: any[]): any;
+  /** Image pipeline entry point, used by the image-model auto-bridge. */
+  dispatchImageGenerations(
+    request: UnifiedImageGenerationRequest,
+    signal?: AbortSignal,
+    resolveTimeoutMs?: ResolveTimeoutMs
+  ): Promise<UnifiedImageGenerationResponse>;
   emitRoutingUpdate(...args: any[]): void;
   executeProviderRequest(...args: any[]): Promise<Response>;
   formatFailureReason(...args: any[]): string;
@@ -85,6 +97,16 @@ export class RequestManager {
       sessionKey,
       host.appendSkippedAttempt.bind(host)
     );
+
+    // A chat-shaped request that names an IMAGE model is served through the
+    // image pipeline instead (see image-model-bridge.ts). This sits here —
+    // after candidate resolution, before the per-target loop — because
+    // detection needs resolved candidates (aliases, `direct/`, key policy,
+    // quota already applied) and nothing target-specific has run yet.
+    if (isImageModelRoute(request, candidates, config)) {
+      return bridgeChatToImageGeneration(request, candidates, host, signal, resolveTimeoutMs);
+    }
+
     const targets = failoverEnabled ? candidates : [candidates[0]!];
     const attemptedProviders: string[] = [];
     let lastError: any = null;

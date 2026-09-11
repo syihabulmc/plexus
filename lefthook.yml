@@ -46,11 +46,8 @@ pre-commit:
       exclude:
         - "packages/backend/drizzle/migrations/**"
         - "packages/backend/drizzle/migrations_pg/**"
+        - "packages/backend/src/assets/openapi.json"
       run: bunx biome format --write {staged_files} && git add {staged_files}
-
-    # --- Repo map: regenerate and stage before committing -------------------
-    repomap:
-      run: bun run generate:repomap && git add .repomap.txt
 
     # --- Biome: lint all sources ---------------------------------------------
     biome-lint:

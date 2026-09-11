@@ -1,6 +1,8 @@
 import { getCatalogModels } from '../pi-ai/catalog';
 import { getProviderTypes, type ProviderConfig } from '../../config';
 import { logger } from '../../utils/logger';
+import { OAuthAuthManager } from '../oauth/oauth-auth-manager';
+import { buildCodexModelsUrl, buildCodexOAuthHeaders } from '../oauth/oauth-native-request';
 
 export interface DiscoveredModel {
   id: string;
@@ -11,6 +13,15 @@ export interface DiscoveredModel {
   owned_by?: string;
   description?: string;
   pricing?: { prompt?: string; completion?: string };
+  /** Modality hint for the target form — image models cannot serve chat. */
+  type?: 'text' | 'image';
+  /** Target protocols this model can be reached through (e.g. `codex-images`). */
+  access_via?: string[];
+  /**
+   * The upstream's own listing hint: `hide` models work but are not advertised
+   * in the Codex CLI picker. Entries the upstream marks `none` are dropped.
+   */
+  visibility?: 'list' | 'hide';
 }
 
 const ANTHROPIC_API_HOST = 'api.anthropic.com';
@@ -149,6 +160,122 @@ export function getOAuthProviderModels(providerId: string): DiscoveredModel[] {
   }));
 }
 
+// ─── Codex OAuth: live model discovery ──────────────────────────────────────
+
+/** Codex image models: real, usable, and never present in the backend list. */
+export const CODEX_IMAGE_MODELS: readonly DiscoveredModel[] = [
+  'gpt-image-2',
+  'gpt-image-2.5-flare',
+  'gpt-image-2.5-sunburst',
+].map((id) => ({
+  id,
+  name: id,
+  description: 'Codex Images (ChatGPT OAuth)',
+  type: 'image' as const,
+  access_via: ['codex-images'],
+}));
+
+const CODEX_MODELS_TIMEOUT_MS = 15_000;
+
+/** One record of `GET /codex/models` (only the fields we consume). */
+interface CodexModelRecord {
+  slug?: unknown;
+  display_name?: unknown;
+  description?: unknown;
+  visibility?: unknown;
+  priority?: unknown;
+  context_window?: unknown;
+}
+
+function mapCodexModelRecords(records: CodexModelRecord[]): DiscoveredModel[] {
+  return records
+    .filter(
+      (record): record is CodexModelRecord & { slug: string } =>
+        typeof record?.slug === 'string' && record.slug.length > 0 && record.visibility !== 'none'
+    )
+    .sort((a, b) => {
+      const priority = (record: CodexModelRecord) =>
+        typeof record.priority === 'number' ? record.priority : 0;
+      return priority(b) - priority(a) || a.slug.localeCompare(b.slug);
+    })
+    .map((record) => ({
+      id: record.slug,
+      ...(typeof record.display_name === 'string' ? { name: record.display_name } : {}),
+      ...(typeof record.description === 'string' ? { description: record.description } : {}),
+      ...(typeof record.context_window === 'number'
+        ? { context_length: record.context_window }
+        : {}),
+      ...(record.visibility === 'list' || record.visibility === 'hide'
+        ? { visibility: record.visibility }
+        : {}),
+    }));
+}
+
+/** Append the curated image models, never shadowing an id the list already has. */
+function withCodexImageModels(models: DiscoveredModel[]): DiscoveredModel[] {
+  const seen = new Set(models.map((model) => model.id));
+  return [...models, ...CODEX_IMAGE_MODELS.filter((model) => !seen.has(model.id))];
+}
+
+/**
+ * List the Codex models the signed-in ChatGPT account may actually use.
+ *
+ * The pi-ai catalog is a static, account-blind snapshot; the ChatGPT backend
+ * knows the real entitlement (plan tier, staged rollouts, `client_version`
+ * gating), so ask it with the same OAuth identity `/codex/responses` uses. The
+ * backend never lists the image models, so the curated `CODEX_IMAGE_MODELS`
+ * are appended.
+ *
+ * Discovery is best-effort: every failure (missing credentials, non-2xx,
+ * network/timeout, malformed body) degrades to the static catalog plus the
+ * image models, reporting `source: 'catalog'` and a warning the UI can show —
+ * a Fetch Models click should never come back empty because the account is
+ * logged out.
+ */
+export async function listCodexOAuthModels(oauthAccountId?: string | null): Promise<{
+  models: DiscoveredModel[];
+  source: 'codex-backend' | 'catalog';
+  warning?: string;
+}> {
+  try {
+    const token = await OAuthAuthManager.getInstance().getApiKey('openai-codex', oauthAccountId);
+    const url = buildCodexModelsUrl();
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...buildCodexOAuthHeaders(token),
+      },
+      signal: AbortSignal.timeout(CODEX_MODELS_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Codex model list returned ${response.status} ${response.statusText}`);
+    }
+
+    const body = (await response.json()) as { models?: unknown };
+    if (!Array.isArray(body?.models)) {
+      throw new Error('Codex model list response had no models array');
+    }
+
+    return {
+      models: withCodexImageModels(mapCodexModelRecords(body.models as CodexModelRecord[])),
+      source: 'codex-backend',
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    logger.warn(`Codex model discovery failed (${reason}); falling back to the static catalog.`);
+    return {
+      models: withCodexImageModels(getOAuthProviderModels('openai-codex')),
+      source: 'catalog',
+      warning:
+        `Could not reach the Codex model list (${reason}); showing the static catalog. ` +
+        "Log in with OAuth to see your account's models.",
+    };
+  }
+}
+
 export function deriveModelsUrl(provider: ProviderConfig): string | null {
   if (typeof provider.api_base_url === 'string') {
     const types = getProviderTypes(provider);
@@ -171,6 +298,9 @@ export function deriveModelsUrl(provider: ProviderConfig): string | null {
 
 export async function discoverProviderModels(provider: ProviderConfig): Promise<DiscoveredModel[]> {
   if (provider.oauth_provider) {
+    if (provider.oauth_provider === 'openai-codex') {
+      return (await listCodexOAuthModels(provider.oauth_account)).models;
+    }
     return getOAuthProviderModels(provider.oauth_provider);
   }
 
@@ -182,9 +312,23 @@ export async function discoverProviderModels(provider: ProviderConfig): Promise<
   return result.data;
 }
 
+/**
+ * Bare model ids for model autosync.
+ *
+ * Autosync inserts what it is given as plain text targets (no `modelType`, empty
+ * `accessVia`), so image models must never reach it: a bare `gpt-image-2` row
+ * would be dispatched to `/codex/responses` as a chat model, earn a cooldown on
+ * the upstream rejection, and claim the id an admin needs for the correctly
+ * typed image target. Only text-capable models survive the filter.
+ */
 export async function discoverProviderModelIds(provider: ProviderConfig): Promise<string[]> {
   const models = await discoverProviderModels(provider);
   return Array.from(
-    new Set(models.map((model) => model.id).filter((id): id is string => typeof id === 'string'))
+    new Set(
+      models
+        .filter((model) => model.type !== 'image')
+        .map((model) => model.id)
+        .filter((id): id is string => typeof id === 'string')
+    )
   ).sort((a, b) => a.localeCompare(b));
 }

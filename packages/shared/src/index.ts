@@ -10,6 +10,8 @@ export {
 export { constrainedRatio, mostConstrained, sortMostConstrainedFirst } from './quota-ranking';
 export type { QuotaRatioFields } from './quota-ranking';
 
+export { isOAuthPlaceholderUrl } from './provider';
+
 export {
   LocalHttpMcpServerConfigSchema,
   McpKeyCreateSchema,

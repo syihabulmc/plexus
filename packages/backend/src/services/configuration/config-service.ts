@@ -1,6 +1,6 @@
 import { ConfigRepository, OAuthCredentialsData } from '../../db/config-repository';
 import { logger } from '../../utils/logger';
-import { assertNoAliasRefCycles } from '../../config';
+import { assertNoAliasRefCycles, isOAuthPlaceholderUrl } from '../../config';
 import type {
   PlexusConfig,
   ProviderConfig,
@@ -612,11 +612,11 @@ export class ConfigService {
 
   private isOAuthProvider(config: any): boolean {
     if (typeof config?.api_base_url === 'string') {
-      return config.api_base_url.startsWith('oauth://');
+      return isOAuthPlaceholderUrl(config.api_base_url);
     }
     if (typeof config?.api_base_url === 'object' && config.api_base_url !== null) {
       return Object.values(config.api_base_url).some(
-        (v) => typeof v === 'string' && v.startsWith('oauth://')
+        (v) => typeof v === 'string' && isOAuthPlaceholderUrl(v)
       );
     }
     return false;

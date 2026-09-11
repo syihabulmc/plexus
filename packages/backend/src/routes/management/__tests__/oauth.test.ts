@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import type { OAuthProviderDescriptor } from '../../../services/oauth/oauth-providers';
 import { registerOAuthRoutes } from '../oauth';
 import { OAuthLoginSessionManager } from '../../../services/oauth/oauth-login-session';
 import { OAuthAuthManager } from '../../../services/oauth/oauth-auth-manager';
+import { CodexVersionService } from '../../../services/oauth/codex-version-service';
+import { CODEX_IMAGE_MODELS } from '../../../services/providers/provider-model-discovery';
+import { registerSpy } from '../../../../test/test-utils';
 
 // @earendil-works/pi-ai is mocked globally in vitest.setup.ts — do not add a
 // per-file vi.mock() call here.  With isolate: false all files share one
@@ -245,5 +248,95 @@ describe('OAuth management routes', () => {
     const json = response.json() as { data: Array<any> };
     expect(Array.isArray(json.data)).toBe(true);
     expect(json.data.length).toBe(0);
+  });
+
+  it('labels static-catalog answers with their source', async () => {
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/v0/management/oauth/models?providerId=anthropic',
+    });
+
+    const json = response.json() as { source?: string; warning?: string };
+    expect(json.source).toBe('catalog');
+    expect(json.warning).toBeUndefined();
+  });
+
+  describe('Codex live model discovery', () => {
+    beforeEach(() => {
+      CodexVersionService.resetForTesting();
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      CodexVersionService.resetForTesting();
+    });
+
+    it('forwards accountId to the Codex backend and reports the live source', async () => {
+      const getApiKey = registerSpy(OAuthAuthManager.getInstance(), 'getApiKey').mockResolvedValue(
+        'codex-token'
+      );
+      const fetchSpy = registerSpy(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          models: [
+            {
+              slug: 'gpt-5.4-codex',
+              display_name: 'GPT-5.4 Codex',
+              visibility: 'list',
+              priority: 5,
+              context_window: 272000,
+            },
+          ],
+        }),
+      } as any);
+
+      const response = await fastify.inject({
+        method: 'GET',
+        url: '/v0/management/oauth/models?providerId=openai-codex&accountId=work',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(getApiKey).toHaveBeenCalledWith('openai-codex', 'work');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      const json = response.json() as {
+        data: Array<{ id: string }>;
+        source: string;
+        warning?: string;
+      };
+      expect(json.source).toBe('codex-backend');
+      expect(json.warning).toBeUndefined();
+      const ids = json.data.map((model) => model.id);
+      expect(ids).toContain('gpt-5.4-codex');
+      for (const image of CODEX_IMAGE_MODELS) {
+        expect(ids).toContain(image.id);
+      }
+    });
+
+    it('degrades to the catalog with a warning when discovery fails', async () => {
+      registerSpy(OAuthAuthManager.getInstance(), 'getApiKey').mockRejectedValue(
+        new Error('OAuth: Not authenticated for provider')
+      );
+      const fetchSpy = registerSpy(globalThis, 'fetch');
+
+      const response = await fastify.inject({
+        method: 'GET',
+        url: '/v0/management/oauth/models?providerId=openai-codex',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      const json = response.json() as {
+        data: Array<{ id: string }>;
+        source: string;
+        warning?: string;
+      };
+      expect(json.source).toBe('catalog');
+      expect(json.warning).toEqual(expect.stringContaining('static catalog'));
+      expect(json.data.map((model) => model.id)).toContain('gpt-image-2');
+    });
   });
 });

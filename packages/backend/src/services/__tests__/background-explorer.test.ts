@@ -30,7 +30,7 @@ function setBaseConfig(opts: {
   enabled: boolean;
   stalenessThresholdSeconds?: number;
   workerConcurrency?: number;
-  providers?: Record<string, { enabled?: boolean }>;
+  providers?: Record<string, { enabled?: boolean; models?: Record<string, { type?: string }> }>;
 }) {
   setConfigForTesting({
     providers: (opts.providers ?? {
@@ -181,6 +181,85 @@ describe('BackgroundExplorer', () => {
         { provider: 'p2', model: 'm2' },
       ])
     );
+    await flushPromises();
+
+    expect(probe.runProbe).not.toHaveBeenCalled();
+  });
+
+  // Probes are chat-shaped, and since the chat-to-image bridge landed a chat
+  // probe aimed at an image model is a REAL, billed image generation. Nothing
+  // non-text may ever be enqueued.
+  test('never probes an image-typed target while a text target still is', async () => {
+    setBaseConfig({
+      enabled: true,
+      stalenessThresholdSeconds: 0,
+      providers: {
+        p1: { enabled: true, models: { m1: { type: 'text' } } },
+        p2: { enabled: true, models: { m2: { type: 'image' } } },
+      },
+    });
+    const probe = makeProbeService();
+    const explorer = BackgroundExplorer.initialize(probe);
+
+    explorer.maybeTrigger(
+      makeGroup('latency', [
+        { provider: 'p1', model: 'm1' },
+        { provider: 'p2', model: 'm2' },
+      ])
+    );
+    await flushPromises();
+
+    const calls = (probe.runProbe as any).mock.calls.map((c: any[]) => c[0]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: 'p1', model: 'm1', apiType: 'chat' });
+  });
+
+  test('skips every non-text model type, and untyped models still probe', async () => {
+    setBaseConfig({
+      enabled: true,
+      stalenessThresholdSeconds: 0,
+      providers: {
+        p1: {
+          enabled: true,
+          models: {
+            embed: { type: 'embeddings' },
+            stt: { type: 'transcriptions' },
+            tts: { type: 'speech' },
+            pic: { type: 'image' },
+            untyped: {},
+          },
+        },
+      },
+    });
+    const probe = makeProbeService();
+    const explorer = BackgroundExplorer.initialize(probe);
+
+    explorer.maybeTrigger(
+      makeGroup('e2e_performance', [
+        { provider: 'p1', model: 'embed' },
+        { provider: 'p1', model: 'stt' },
+        { provider: 'p1', model: 'tts' },
+        { provider: 'p1', model: 'pic' },
+        { provider: 'p1', model: 'untyped' },
+      ])
+    );
+    await flushPromises();
+
+    const calls = (probe.runProbe as any).mock.calls.map((c: any[]) => c[0]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: 'p1', model: 'untyped' });
+  });
+
+  test('skips an alias-level image type even when the provider model is untyped', async () => {
+    setBaseConfig({
+      enabled: true,
+      stalenessThresholdSeconds: 0,
+      providers: { p1: { enabled: true } },
+    });
+    const probe = makeProbeService();
+    const explorer = BackgroundExplorer.initialize(probe);
+
+    explorer.maybeTrigger(makeGroup('performance', [{ provider: 'p1', model: 'm1' }]), 'image');
     await flushPromises();
 
     expect(probe.runProbe).not.toHaveBeenCalled();

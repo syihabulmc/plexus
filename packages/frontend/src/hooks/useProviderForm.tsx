@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { isOAuthPlaceholderUrl } from '@plexus/shared';
 import { useNavigate } from 'react-router-dom';
 import { api, Provider, OAuthSession, OAuthProviderInfo, fetchQuotaCheckers } from '../lib/api';
 import type { QuotaCheckerInfo } from '../types/quota';
@@ -17,6 +18,7 @@ const KNOWN_APIS = [
   'speech',
   'openai-images',
   'openrouter-images',
+  'codex-images',
   'responses',
   'ollama',
 ];
@@ -35,8 +37,8 @@ const getOAuthCheckerType = (oauthProvider?: string): string | null => {
 const inferProviderTypes = (apiBaseUrl?: string | Record<string, string>): string[] => {
   if (!apiBaseUrl) return ['chat'];
   if (typeof apiBaseUrl === 'string') {
-    const url = apiBaseUrl.toLowerCase();
-    if (url.startsWith('oauth://')) return ['oauth'];
+    const url = apiBaseUrl.trim().toLowerCase();
+    if (isOAuthPlaceholderUrl(apiBaseUrl)) return ['oauth'];
     if (url.includes('anthropic.com')) return ['messages'];
     if (url.includes('generativelanguage.googleapis.com')) return ['gemini'];
     return ['chat'];
@@ -84,7 +86,17 @@ export interface FetchedModel {
   owned_by?: string;
   description?: string;
   pricing?: { prompt?: string; completion?: string };
+  /** Modality hint — image models are added with an image-only protocol. */
+  type?: 'text' | 'image';
+  /** Protocols this model can be reached through (e.g. `codex-images`). */
+  access_via?: string[];
+  /** `hide` models work but the upstream does not advertise them. */
+  visibility?: 'list' | 'hide';
 }
+
+/** Fallback protocol for Codex image models when the backend sends none. */
+const CODEX_IMAGE_ACCESS = 'codex-images';
+const CODEX_OAUTH_PROVIDER = 'openai-codex';
 
 export function useProviderForm() {
   const toast = useToast();
@@ -131,6 +143,8 @@ export function useProviderForm() {
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(new Set());
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // A catalog fallback is a warning, not an error: the list is still usable.
+  const [fetchWarning, setFetchWarning] = useState<string | null>(null);
 
   const [deleteModalProvider, setDeleteModalProvider] = useState<Provider | null>(null);
   const [deleteModalLoading, setDeleteModalLoading] = useState(false);
@@ -154,7 +168,7 @@ export function useProviderForm() {
   // Derived
   const isOAuthMode =
     typeof editingProvider.apiBaseUrl === 'string' &&
-    editingProvider.apiBaseUrl.toLowerCase().startsWith('oauth://');
+    isOAuthPlaceholderUrl(editingProvider.apiBaseUrl);
   const oauthCheckerType = isOAuthMode ? getOAuthCheckerType(editingProvider.oauthProvider) : null;
   const selectableQuotaCheckerTypes = oauthCheckerType
     ? [oauthCheckerType]
@@ -715,17 +729,23 @@ export function useProviderForm() {
     setFetchedModels([]);
     setSelectedModelIds(new Set());
     setFetchError(null);
+    setFetchWarning(null);
     setIsFetchModelsModalOpen(true);
   };
 
   const handleFetchModels = async () => {
     if (isOAuthMode) {
       const oauthProvider = editingProvider.oauthProvider || (OAUTH_PROVIDERS[0]?.value ?? '');
+      // Codex model lists are account-scoped; without an account the backend
+      // falls back to the static catalog and returns a warning.
+      const accountId = editingProvider.oauthAccount?.trim();
       setIsFetchingModels(true);
       setFetchError(null);
+      setFetchWarning(null);
       try {
-        const models = await api.getOAuthProviderModels(oauthProvider);
+        const { models, warning } = await api.getOAuthProviderModels(oauthProvider, accountId);
         const sortedModels = [...models].sort((a, b) => a.id.localeCompare(b.id));
+        setFetchWarning(warning ?? null);
         if (sortedModels.length === 0) {
           setFetchError(`No models found for OAuth provider '${oauthProvider}'.`);
           setFetchedModels([]);
@@ -748,6 +768,7 @@ export function useProviderForm() {
     }
     setIsFetchingModels(true);
     setFetchError(null);
+    setFetchWarning(null);
     try {
       const data = await api.fetchProviderModels(modelsUrl, editingProvider.apiKey);
       if (!data.data || !Array.isArray(data.data)) throw new Error('Invalid response format');
@@ -786,9 +807,25 @@ export function useProviderForm() {
         ? editingProvider.models
         : {}),
     };
+    // Codex is the only provider whose discovery reports image models, and
+    // `codex-images` is the only image protocol its dispatcher accepts. Anywhere
+    // else an upstream `type: "image"` carries no protocol we could name, so
+    // those entries keep the plain shape and the admin picks a type by hand.
+    const isCodexOAuthProvider =
+      isOAuthMode && editingProvider.oauthProvider === CODEX_OAUTH_PROVIDER;
     fetchedModels.forEach((model) => {
       if (selectedModelIds.has(model.id) && !models[model.id]) {
-        models[model.id] = { pricing: { source: 'simple', input: 0, output: 0 }, access_via: [] };
+        const pricing = { source: 'simple', input: 0, output: 0 };
+        // Image models cannot serve chat, so they are added as `image` with an
+        // image protocol rather than as a chat target.
+        models[model.id] =
+          isCodexOAuthProvider && model.type === 'image'
+            ? {
+                pricing,
+                type: 'image',
+                access_via: model.access_via?.length ? model.access_via : [CODEX_IMAGE_ACCESS],
+              }
+            : { pricing, access_via: [] };
       }
     });
     setEditingProvider({ ...editingProvider, models });
@@ -946,6 +983,7 @@ export function useProviderForm() {
     selectedModelIds,
     setSelectedModelIds,
     fetchError,
+    fetchWarning,
     // Delete
     deleteModalProvider,
     setDeleteModalProvider,

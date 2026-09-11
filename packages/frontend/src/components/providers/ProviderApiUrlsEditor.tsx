@@ -14,6 +14,7 @@ const KNOWN_APIS = [
   'speech',
   'openai-images',
   'openrouter-images',
+  'codex-images',
   'responses',
   'ollama',
 ];

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { McpServerConfigSchema } from '@plexus/shared';
+import { isOAuthPlaceholderUrl, McpServerConfigSchema } from '@plexus/shared';
 import { logger } from './utils/logger';
 import { DEFAULT_VISION_DESCRIPTION_PROMPT } from './utils/constants';
 import { isValidIpRule } from './utils/ip-match';
@@ -285,7 +285,13 @@ export const ProviderConfigSchema = z
       z.string().refine((value) => isValidUrlOrOAuth(value), {
         message: 'api_base_url must be a valid URL or oauth://',
       }),
-      z.record(z.string(), z.string()),
+      // The map form is dispatched verbatim (see resolveProviderBaseUrl), so an
+      // `oauth://` entry here would be handed straight to fetch. OAuth providers
+      // must declare the placeholder through the string form instead.
+      z.record(z.string(), z.string()).refine((urlMap) => !hasOAuthPlaceholder(urlMap), {
+        message:
+          "api_base_url map entries must be real URLs; use the string form api_base_url: 'oauth://' for OAuth providers",
+      }),
     ]),
     api_key: z.string().optional(),
     oauth_provider: OAuthProviderSchema.optional(),
@@ -749,7 +755,7 @@ const QuotaConfigSchema = z.object({
   options: z.record(z.string(), z.any()).default({}),
 });
 
-export { McpServerConfigSchema } from '@plexus/shared';
+export { isOAuthPlaceholderUrl, McpServerConfigSchema } from '@plexus/shared';
 
 const CooldownPolicySchema = z.object({
   initialMinutes: z.number().min(0.1).default(2),
@@ -870,7 +876,7 @@ export function getProviderTypes(provider: ProviderConfig): string[] {
     // Single URL - infer type from URL pattern
     const url = provider.api_base_url.toLowerCase();
 
-    if (url.startsWith('oauth://')) {
+    if (isOAuthPlaceholderUrl(provider.api_base_url)) {
       return ['oauth'];
     }
 
@@ -896,8 +902,12 @@ export function getProviderTypes(provider: ProviderConfig): string[] {
   }
 }
 
+function hasOAuthPlaceholder(urlMap: Record<string, string>): boolean {
+  return Object.values(urlMap).some(isOAuthPlaceholderUrl);
+}
+
 function isValidUrlOrOAuth(value: string): boolean {
-  if (value.startsWith('oauth://')) return true;
+  if (isOAuthPlaceholderUrl(value)) return true;
   try {
     new URL(value);
     return true;
@@ -910,9 +920,9 @@ function isOAuthProviderConfig(provider: {
   api_base_url: string | Record<string, string>;
 }): boolean {
   if (typeof provider.api_base_url === 'string') {
-    return provider.api_base_url.startsWith('oauth://');
+    return isOAuthPlaceholderUrl(provider.api_base_url);
   }
-  return Object.values(provider.api_base_url).some((value) => value.startsWith('oauth://'));
+  return hasOAuthPlaceholder(provider.api_base_url);
 }
 
 // --- Loader ---
@@ -1006,12 +1016,12 @@ function migrateOAuthAccounts(parsed: unknown): {
     const providerConfig = providerValue as Record<string, unknown>;
     const baseUrl = providerConfig.api_base_url;
     const isOAuth =
-      (typeof baseUrl === 'string' && baseUrl.startsWith('oauth://')) ||
+      (typeof baseUrl === 'string' && isOAuthPlaceholderUrl(baseUrl)) ||
       (typeof baseUrl === 'object' &&
         baseUrl !== null &&
         !Array.isArray(baseUrl) &&
         Object.values(baseUrl as Record<string, unknown>).some(
-          (value) => typeof value === 'string' && value.startsWith('oauth://')
+          (value) => typeof value === 'string' && isOAuthPlaceholderUrl(value)
         ));
 
     if (!isOAuth) {

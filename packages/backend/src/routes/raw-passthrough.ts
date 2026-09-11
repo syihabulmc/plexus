@@ -346,7 +346,11 @@ export async function registerRawPassthroughRoutes(
         }
 
         const abortController = new AbortController();
-        const disconnectDetection = wireEarlyDisconnectDetection(request, abortController);
+        const disconnectDetection = wireEarlyDisconnectDetection(
+          request,
+          abortController,
+          requestId
+        );
         const timeoutMs = provider.timeoutMs ?? (getConfig().timeout?.defaultSeconds ?? 300) * 1000;
         const timeout = setTimeout(() => {
           abortController.abort(new DOMException('Upstream request timed out', 'TimeoutError'));

@@ -8,6 +8,8 @@ type UsageSubset = Pick<
   | 'reasoning_tokens'
   | 'cached_tokens'
   | 'cache_creation_tokens'
+  | 'input_image_tokens'
+  | 'output_image_tokens'
 >;
 
 const safeToken = (value: unknown): number => {
@@ -15,6 +17,14 @@ const safeToken = (value: unknown): number => {
   if (!Number.isFinite(num)) return 0;
   return Math.max(0, Math.floor(num));
 };
+
+/**
+ * Sanitizes an optional token count, preserving the "not reported" state.
+ * Returns undefined when the provider omitted the field so callers can leave
+ * the key off entirely rather than fabricating a 0.
+ */
+const optionalToken = (value: unknown): number | undefined =>
+  value === undefined || value === null ? undefined : safeToken(value);
 
 const safeCost = (value: unknown): number | null => {
   if (value === null || value === undefined) return null;
@@ -155,6 +165,10 @@ export function normalizeOpenAIResponsesUsage(usage: any): UsageSubset {
   const cacheWriteTokens = safeToken(usage?.input_tokens_details?.cache_write_tokens);
   const outputTokens = safeToken(usage?.output_tokens);
   const reasoningTokens = safeToken(usage?.output_tokens_details?.reasoning_tokens);
+  // Present only when the built-in `image_generation` tool ran; kept optional
+  // so usage payloads rebuilt downstream stay unchanged for text-only turns.
+  const inputImageTokens = optionalToken(usage?.input_tokens_details?.image_tokens);
+  const outputImageTokens = optionalToken(usage?.output_tokens_details?.image_tokens);
 
   // Responses API input_tokens includes cached reads and cache writes.
   // Responses payloads may appear in two shapes depending on source:
@@ -175,6 +189,8 @@ export function normalizeOpenAIResponsesUsage(usage: any): UsageSubset {
     reasoning_tokens: reasoningTokens,
     cached_tokens: cachedTokens,
     cache_creation_tokens: cacheWriteTokens,
+    ...(inputImageTokens !== undefined ? { input_image_tokens: inputImageTokens } : {}),
+    ...(outputImageTokens !== undefined ? { output_image_tokens: outputImageTokens } : {}),
   };
 }
 

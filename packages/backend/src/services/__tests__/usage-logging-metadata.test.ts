@@ -65,6 +65,49 @@ describe('UsageInspector Metadata Robustness', () => {
     return capturedRecord;
   };
 
+  it('finalizes usage before a completed Responses transport is closed', () => {
+    const requestId = 'responses-completed-before-transport-close';
+    const usageRecord: Partial<UsageRecord> = { requestId, responseStatus: 'success' };
+    const inspector = new UsageInspector(
+      requestId,
+      mockStorage,
+      usageRecord,
+      mockPricing,
+      undefined,
+      Date.now(),
+      false,
+      'responses',
+      'responses'
+    );
+    const dm = DebugManager.getInstance();
+    dm.startLog(requestId, {});
+    dm.addReconstructedRawResponse(requestId, {
+      id: 'resp_completed',
+      status: 'completed',
+      output: [],
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        total_tokens: 15,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens_details: { reasoning_tokens: 0 },
+      },
+    });
+
+    inspector.finalize();
+    inspector.destroy();
+
+    expect(mockStorage.saveRequest).toHaveBeenCalledTimes(1);
+    expect(mockStorage.saveRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId,
+        responseStatus: 'success',
+        tokensInput: 10,
+        tokensOutput: 5,
+      })
+    );
+  });
+
   it('should extract tool call count from OpenAI non-streaming choices[0].message.tool_calls', async () => {
     const requestId = 'openai-nonstream-tools';
     const snapshot = {

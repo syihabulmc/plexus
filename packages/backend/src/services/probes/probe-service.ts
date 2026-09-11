@@ -75,12 +75,10 @@ function buildSecondaryRequest(apiType: ProbeApiType, modelPath: string): any {
     case 'embeddings':
       return { model: modelPath, input: ['Hello world'] };
     case 'images':
-      return {
-        model: modelPath,
-        prompt: 'A tiny 256x256 red square',
-        n: 1,
-        size: '256x256',
-      };
+      // Deliberately minimal: `response_format` and `size` are not universally
+      // supported (Codex Images rejects `url` and does not render 256x256), so
+      // the probe sends only what every image target accepts.
+      return { model: modelPath, prompt: 'A tiny red square', n: 1 };
     case 'speech':
       return { model: modelPath, input: 'Hello world' };
     case 'oauth':
@@ -179,28 +177,15 @@ export class ProbeService {
           incomingApiType: 'embeddings',
         });
       } else if (apiType === 'images') {
-        const imgReq = testRequest as {
-          model: string;
-          prompt: string;
-          n?: number;
-          size?: string;
-          quality?: string;
-          style?: string;
-          user?: string;
-        };
+        const imgReq = testRequest as { model: string; prompt: string; n?: number };
         response = await this.dispatcher.dispatchImageGenerations({
           model: imgReq.model,
           prompt: imgReq.prompt,
           n: imgReq.n,
-          size: imgReq.size,
-          response_format: 'url' as const,
-          quality: imgReq.quality,
-          style: imgReq.style,
-          user: imgReq.user,
           originalBody: testRequest,
           requestId,
           incomingApiType: 'images',
-        } as any);
+        });
       } else if (apiType === 'speech') {
         const { SpeechTransformer } = await import('../../transformers/speech');
         const transformer = new SpeechTransformer();

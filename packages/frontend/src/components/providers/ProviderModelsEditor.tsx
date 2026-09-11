@@ -11,6 +11,7 @@ import {
   X,
   Download,
   Info,
+  AlertTriangle,
 } from 'lucide-react';
 import { CopyButton } from '../ui/CopyButton';
 import { Button } from '../ui/Button';
@@ -24,21 +25,35 @@ import { KNOWN_ADAPTERS } from './ProviderAdvancedEditor';
 import { ReasoningRewriteRulesEditor } from './ReasoningRewriteRulesEditor';
 import { apiAccessToKey, hasApiAccess, toggleApiAccess } from '../../lib/apiFormats';
 
-const API_ACCESS_OPTIONS = [
+type ApiAccessOption = { type: string; label: string };
+
+const API_ACCESS_OPTIONS: readonly ApiAccessOption[] = [
   { type: 'chat', label: 'chat' },
   { type: 'completions', label: 'completions' },
   { type: 'messages', label: 'messages' },
   { type: 'gemini', label: 'gemini' },
   { type: 'responses', label: 'responses' },
   { type: 'ollama', label: 'ollama' },
-] as const;
+];
 
-const IMAGE_API_ACCESS_OPTIONS = [
+// HTTP image protocols — every one needs a reachable base URL, so none of them
+// can be served by an OAuth provider.
+const IMAGE_API_ACCESS_OPTIONS: readonly ApiAccessOption[] = [
   { type: 'chat', label: 'OpenAI-compatible' },
   { type: 'openai-images', label: 'OpenAI Images' },
   { type: 'openrouter-images', label: 'OpenRouter Images' },
   { type: 'gemini', label: 'Gemini Images' },
-] as const;
+];
+
+// The only image protocol an `openai-codex` OAuth provider can dispatch: the
+// backend rejects any other image target on an OAuth route with a 400.
+const CODEX_IMAGE_API_ACCESS_OPTIONS: readonly ApiAccessOption[] = [
+  { type: 'codex-images', label: 'Codex Images (ChatGPT OAuth)' },
+];
+
+const CODEX_OAUTH_PROVIDER = 'openai-codex';
+const DEFAULT_IMAGE_ACCESS = 'openai-images';
+const CODEX_IMAGE_ACCESS = 'codex-images';
 
 const GPT5_SUPPRESSION_ADAPTER = 'suppress_unsupported_gpt5_options';
 
@@ -68,6 +83,8 @@ const getApiBadgeStyle = (apiType: string): React.CSSProperties => {
       return { backgroundColor: '#06b6d4', color: 'white', border: 'none' };
     case 'openrouter-images':
       return { backgroundColor: '#7c3aed', color: 'white', border: 'none' };
+    case 'codex-images':
+      return { backgroundColor: '#10a37f', color: 'white', border: 'none' };
     case 'ollama':
       return { backgroundColor: '#1a5f7a', color: 'white', border: 'none' };
     default:
@@ -142,6 +159,7 @@ interface Props {
   onTestModel: (providerId: string, modelId: string, modelType?: string) => void;
   getApiBaseUrlMap: () => Record<string, string>;
   isNewProvider: boolean;
+  isOAuthMode: boolean;
 }
 
 export function ProviderModelsEditor({
@@ -166,6 +184,7 @@ export function ProviderModelsEditor({
   onDismissTestMessage,
   getApiBaseUrlMap,
   isNewProvider,
+  isOAuthMode,
 }: Props) {
   const [modelAdaptersOpen, setModelAdaptersOpen] = useState<Record<string, boolean>>({});
   const [modelAdvancedOpen, setModelAdvancedOpen] = useState<Record<string, boolean>>({});
@@ -177,6 +196,16 @@ export function ProviderModelsEditor({
   const [piModelCustom, setPiModelCustom] = useState<Record<string, boolean>>({});
 
   const piAiProvider = editingProvider.pi_ai_provider;
+
+  // Codex Images rides the provider's ChatGPT OAuth session instead of a base
+  // URL, so it is offered only on an OAuth provider whose backend is Codex —
+  // and there it is the only image protocol the dispatcher will accept.
+  const isCodexOAuthProvider =
+    isOAuthMode && editingProvider.oauthProvider === CODEX_OAUTH_PROVIDER;
+  const imageAccessOptions = isCodexOAuthProvider
+    ? CODEX_IMAGE_API_ACCESS_OPTIONS
+    : IMAGE_API_ACCESS_OPTIONS;
+  const defaultImageAccess = isCodexOAuthProvider ? CODEX_IMAGE_ACCESS : DEFAULT_IMAGE_ACCESS;
 
   useEffect(() => {
     if (!piAiProvider) {
@@ -384,7 +413,7 @@ export function ProviderModelsEditor({
                                 else if (newType === 'image')
                                   updateModelConfig(mId, {
                                     type: newType,
-                                    access_via: ['openai-images'],
+                                    access_via: [defaultImageAccess],
                                   });
                                 else updateModelConfig(mId, { type: newType });
                               }}
@@ -410,7 +439,7 @@ export function ProviderModelsEditor({
                                 }}
                               >
                                 {(mCfg.type === 'image'
-                                  ? IMAGE_API_ACCESS_OPTIONS
+                                  ? imageAccessOptions
                                   : API_ACCESS_OPTIONS
                                 ).map((option) => {
                                   const key = apiAccessToKey(option);
@@ -524,12 +553,42 @@ export function ProviderModelsEditor({
                                 <div className="flex items-start gap-2 py-1.5 px-2 bg-info/10 border border-info/30 rounded-sm">
                                   <Info size={14} className="text-info shrink-0 mt-0.5" />
                                   <span className="text-[11px] text-info">
-                                    Choose one image protocol. OpenRouter Images targets the
-                                    dedicated <code>/api/v1/images</code> endpoint;
-                                    OpenAI-compatible and Gemini Images use their native adapters.
+                                    {isCodexOAuthProvider ? (
+                                      <>
+                                        Codex Images is the only image protocol available on a
+                                        ChatGPT OAuth provider. Requests are signed with the
+                                        provider&apos;s OAuth session, so no base URL is needed.
+                                      </>
+                                    ) : (
+                                      <>
+                                        Choose one image protocol. OpenRouter Images targets the
+                                        dedicated <code>/api/v1/images</code> endpoint;
+                                        OpenAI-compatible and Gemini Images use their native
+                                        adapters.
+                                      </>
+                                    )}
                                   </span>
                                 </div>
                               )}
+                              {mCfg.type === 'image' &&
+                                isCodexOAuthProvider &&
+                                (mCfg.access_via?.length ?? 0) > 0 &&
+                                !hasApiAccess(mCfg.access_via, CODEX_IMAGE_ACCESS) && (
+                                  <div className="flex items-start gap-2 py-1.5 px-2 bg-warning/10 border border-warning/30 rounded-sm">
+                                    <AlertTriangle
+                                      size={14}
+                                      className="text-warning shrink-0 mt-0.5"
+                                    />
+                                    <span className="text-[11px] text-warning">
+                                      This model still targets an HTTP image protocol, which a
+                                      ChatGPT OAuth provider cannot serve. Select{' '}
+                                      <span style={{ fontWeight: 600 }}>
+                                        Codex Images (ChatGPT OAuth)
+                                      </span>{' '}
+                                      above.
+                                    </span>
+                                  </div>
+                                )}
                             </div>
                           )}
 

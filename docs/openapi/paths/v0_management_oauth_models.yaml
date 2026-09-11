@@ -7,21 +7,35 @@ get:
 
     ## Data source
 
-    This endpoint returns models from the pi-ai static catalog. It's used
-    to populate dropdowns in the UI when configuring provider targets.
+    For most providers this is the pi-ai static catalog. For `openai-codex` the
+    gateway asks the ChatGPT backend for the models the signed-in account may
+    actually use (the account-scoped list), then appends the Codex image models,
+    which the backend never lists. If that call fails — no credentials, upstream
+    error, timeout — the response degrades to the static catalog plus the image
+    models and carries a `warning`.
+
+    It's used to populate dropdowns in the UI when configuring provider targets.
 
     ## Response fields
 
-    - `id` — Model identifier (e.g. `gpt-5.4`)
-    - `name` — Human-readable model name
-    - `context_length` — Maximum context window in tokens
-    - `pricing` — Token pricing (if available)
+    - `data[].id` — Model identifier (e.g. `gpt-5.4`)
+    - `data[].name` — Human-readable model name
+    - `data[].context_length` — Maximum context window in tokens
+    - `data[].pricing` — Token pricing (if available)
+    - `data[].type` — `text` or `image` (image models cannot serve chat)
+    - `data[].access_via` — Target protocols the model can be reached through
+      (e.g. `codex-images`)
+    - `data[].visibility` — Upstream listing hint: `list` (advertised) or
+      `hide` (usable but not advertised)
+    - `source` — `codex-backend` when the list came from the live Codex backend,
+      `catalog` when it came from the pi-ai static catalog
+    - `warning` — Present only when live discovery was attempted and failed
 
     ## Note
 
-    This is a static catalog — it doesn't query the provider's live API.
-    Use `/v1/openrouter/models` or `/v1/models` to get the currently
-    configured model list.
+    Apart from `openai-codex`, this is a static catalog — it doesn't query the
+    provider's live API. Use `/v1/openrouter/models` or `/v1/models` to get the
+    currently configured model list.
 
     **Admin only** — limited principals receive 403.
   security:
@@ -33,9 +47,18 @@ get:
       schema:
         type: string
       description: Provider ID to list models for.
+    - in: query
+      name: accountId
+      required: false
+      schema:
+        type: string
+      description: |
+        OAuth account whose entitlement should be used. Only honoured for
+        `openai-codex` live discovery; omit to use the provider's default
+        account.
   responses:
     '200':
-      description: Model list (pi-ai static catalog).
+      description: Model list (live Codex list or pi-ai static catalog).
       content:
         application/json:
           schema:
@@ -52,6 +75,22 @@ get:
                       type: string
                     context_length:
                       type: integer
+                    description:
+                      type: string
+                    type:
+                      type: string
+                      enum:
+                        - text
+                        - image
+                    access_via:
+                      type: array
+                      items:
+                        type: string
+                    visibility:
+                      type: string
+                      enum:
+                        - list
+                        - hide
                     pricing:
                       type: object
                       properties:
@@ -59,6 +98,17 @@ get:
                           type: string
                         completion:
                           type: string
+              source:
+                type: string
+                enum:
+                  - codex-backend
+                  - catalog
+                description: Where the list came from.
+              warning:
+                type: string
+                description: |
+                  Why live discovery was skipped or failed. Present only when
+                  the response fell back to the static catalog.
     '401':
       description: Authentication required or invalid credentials.
   operationId: getV0ManagementOauthModels
