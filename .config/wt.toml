@@ -1,3 +1,0 @@
-   [[pre-start]]
-   init = "bun run scripts/init_worktree.ts"
-
