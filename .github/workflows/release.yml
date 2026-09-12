@@ -1,0 +1,563 @@
+name: Release
+run-name: Release ${{ github.event_name == 'push' && github.ref_name || 'auto-calculated tag' }}
+
+on:
+  push:
+    tags:
+      - '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9]+'  # CalVer: YYYY.MM.DD.N
+  workflow_dispatch:
+    # No inputs — the tag is auto-calculated (CalVer YYYY.MM.DD.N) from
+    # existing git tags, mirroring scripts/release.ts.
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  pull-requests: read
+
+jobs:
+  # ── Setup: resolve/create the tag ──────────────────────────────────────
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release_tag.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag and create if missing
+        id: release_tag
+        run: |
+          set -euo pipefail
+
+          EVENT="${{ github.event_name }}"
+
+          # For tag-push events, use the pushed tag ref directly.
+          # Otherwise (workflow_dispatch) auto-calculate the next CalVer
+          # tag (YYYY.MM.DD.N) from existing git tags, mirroring
+          # scripts/release.ts: highest existing counter for today + 1,
+          # else .1 for a new day. UTC is used for determinism in CI.
+          if [ "$EVENT" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TODAY=$(date -u +'%Y.%m.%d')
+
+            # Highest existing CalVer counter for today (if any), across
+            # all tags fetched by the fetch-depth: 0 checkout above.
+            HIGHEST_TODAY=$(git tag --list \
+              | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$' \
+              | while IFS=. read -r y m d n; do
+                  if [ "$y.$m.$d" = "$TODAY" ]; then echo "$n"; fi
+                done \
+              | sort -n \
+              | tail -1)
+
+            if [ -n "$HIGHEST_TODAY" ]; then
+              TAG="${TODAY}.$((HIGHEST_TODAY + 1))"
+            else
+              TAG="${TODAY}.1"
+            fi
+
+            echo "Auto-calculated release tag: $TAG"
+          fi
+
+          # If the tag doesn't exist, create it on HEAD of main
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG does not exist, creating it on main"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # ── Quality Gates ──────────────────────────────────────────────────────
+  quality-gates:
+    name: Quality Gates
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate server OpenAPI asset
+        run: bun run generate:openapi:asset
+
+      - name: Build frontend
+        run: bun run build:frontend
+
+      - name: Typecheck all workspaces
+        run: bun run typecheck
+        continue-on-error: true
+
+      - name: Run backend tests
+        run: cd packages/backend && bun run test
+
+      - name: Check for pending migrations
+        run: |
+          bun run generate-migrations --name release_check 2>&1 | tee /tmp/migrate.log
+
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard packages/backend/drizzle/migrations packages/backend/drizzle/migrations_pg)" ]; then
+            echo "✅ No pending migrations"
+          else
+            echo "::error::Pending migrations detected! Wait for generate-migrations workflow."
+            exit 1
+          fi
+
+  # ── Generate Release Notes ──────────────────────────────────────────────
+  generate-release-notes:
+    name: Generate Release Notes
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}:${{ github.repository }}|${{ github.workflow }}|${{ github.job }}
+    outputs:
+      notes: ${{ steps.read_notes.outputs.notes }}
+    steps:
+      - name: Mask API key
+        run: echo "::add-mask::$LLM_API_KEY"
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Gather release data
+        id: gather
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const currentTag = '${{ needs.setup.outputs.tag }}';
+            const calVerRegex = /^\d{4}\.\d{2}\.\d{2}\.\d+$/;
+            const fs = require('fs');
+
+            async function getTagDate(tag) {
+              const ref = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+
+              if (ref.data.object.type === 'tag') {
+                const tagObj = await github.rest.git.getTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_sha: ref.data.object.sha,
+                });
+                return new Date(tagObj.data.tagger.date);
+              }
+
+              const commit = await github.rest.git.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: ref.data.object.sha,
+              });
+              return new Date(commit.data.committer.date);
+            }
+
+            const currentDate = await getTagDate(currentTag);
+            core.info(`Current tag ${currentTag} date: ${currentDate.toISOString()}`);
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+
+            const prevRelease = releases
+              .filter(r => !r.prerelease && calVerRegex.test(r.tag_name) && r.tag_name !== currentTag)
+              .sort((a, b) => {
+                const pa = a.tag_name.split('.').map(Number);
+                const pb = b.tag_name.split('.').map(Number);
+                for (let i = 0; i < 4; i++) {
+                  if (pa[i] !== pb[i]) return pb[i] - pa[i];
+                }
+                return 0;
+              })[0];
+
+            let prevDate = null;
+            let prevTag = null;
+
+            if (prevRelease) {
+              prevTag = prevRelease.tag_name;
+              prevDate = new Date(prevRelease.published_at);
+              core.info(`Previous release ${prevTag} published_at: ${prevDate.toISOString()}`);
+            } else {
+              core.info('No previous CalVer release found — this appears to be the first release');
+            }
+
+            const allPRs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              per_page: 100,
+            });
+
+            const relevantPRs = allPRs
+              .filter(pr => {
+                if (!pr.merged_at) return false;
+                const mergedAt = new Date(pr.merged_at);
+                if (prevDate && mergedAt <= prevDate) return false;
+                return mergedAt <= currentDate;
+              })
+              .map(pr => ({
+                number: pr.number,
+                title: pr.title,
+                author: pr.user?.login ?? 'unknown',
+                labels: pr.labels.map(l => l.name),
+                merged_at: pr.merged_at,
+                body: (pr.body ?? '').substring(0, 1000),
+              }));
+
+            core.info(`Found ${relevantPRs.length} PRs in this release window`);
+
+            const allCommits = await github.paginate(github.rest.repos.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: 'main',
+              since: prevDate ? prevDate.toISOString() : undefined,
+              until: currentDate.toISOString(),
+              per_page: 100,
+            });
+
+            const relevantCommits = allCommits.map(c => ({
+              sha: c.sha.substring(0, 7),
+              message: c.commit.message.split('\n')[0],
+              author: c.commit.author?.name ?? c.author?.login ?? 'unknown',
+              date: c.commit.committer?.date ?? null,
+            }));
+
+            core.info(`Found ${relevantCommits.length} commits in this release window`);
+
+            const releaseData = {
+              currentTag,
+              previousTag: prevTag,
+              currentDate: currentDate.toISOString(),
+              previousDate: prevDate ? prevDate.toISOString() : null,
+              pullRequests: relevantPRs,
+              commits: relevantCommits,
+            };
+
+            fs.writeFileSync('release-data.json', JSON.stringify(releaseData, null, 2));
+            core.info('Wrote release-data.json');
+
+      - name: Run release notes agent
+        id: release_notes_agent
+        # claude-code-action detects GitHub event type (PR/issue/comment) and
+        # rejects unsupported ones, including `push` — which is how this
+        # workflow is triggered. The base-action/ subdirectory of the same
+        # repo is the underlying Claude Code executor without the GitHub
+        # event/webhook layer, so it runs regardless of event. Referencing
+        # it here (rather than the separately-tagged anthropics/claude-code-
+        # base-action mirror, whose tags lag far behind and pin an ancient
+        # Claude Code CLI version) keeps it on the same current v1 release
+        # line as claude-code-action.
+        uses: anthropics/claude-code-action/base-action@v1.0.217
+        with:
+          anthropic_api_key: ${{ env.LLM_API_KEY }}
+          claude_args: |
+            --model ${{ vars.LLM_MODEL_ID }}
+            --effort medium
+            --max-turns 10
+            --allowedTools "Read,Write"
+          prompt: |
+            Read `.github/prompts/release-notes.md` and follow its instructions exactly.
+            The release tag is `${{ needs.setup.outputs.tag }}`. Do not perform any other work.
+        env:
+          RELEASE_TAG: ${{ needs.setup.outputs.tag }}
+          ANTHROPIC_BASE_URL: ${{ secrets.LLM_API_HOST }}
+
+      - name: Read agent-generated notes
+        id: read_notes
+        if: always()
+        run: |
+          if [ -f release-notes.md ]; then
+            # Ensure the file ends with a newline to prevent delimiter parser issues
+            [[ -n "$(tail -c1 release-notes.md)" ]] && echo "" >> release-notes.md
+            {
+              echo 'notes<<RELEASE_NOTES_EOF'
+              cat release-notes.md
+              echo 'RELEASE_NOTES_EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::Agent did not write release-notes.md — release will have no body'
+            echo 'notes=' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Claude execution
+        if: always() && steps.release_notes_agent.outputs.execution_file != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes-execution
+          path: ${{ steps.release_notes_agent.outputs.execution_file }}
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ── Build Binaries ──────────────────────────────────────────────────────
+  build-binaries:
+    name: Build Binaries
+    needs: [setup, quality-gates]
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION: ${{ needs.setup.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate server OpenAPI asset
+        run: bun run generate:openapi:asset
+
+      - name: Build frontend
+        run: bun run build:frontend
+
+      - name: Compile all binaries
+        run: |
+          bun run compile:linux-amd64
+          bun run compile:linux-arm64
+          bun run compile:macos
+          bun run compile:windows
+          bun run compile:cli:linux-amd64
+          bun run compile:cli:linux-arm64
+          bun run compile:cli:macos-amd64
+          bun run compile:cli:macos-arm64
+          bun run compile:cli:windows
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: binaries
+          path: |
+            plexus-linux-amd64
+            plexus-linux-arm64
+            plexus-macos
+            plexus.exe
+            plexuscli-linux-amd64
+            plexuscli-linux-arm64
+            plexuscli-macos-amd64
+            plexuscli-macos-arm64
+            plexuscli.exe
+          retention-days: 1
+
+  # ── Build Docker Image (per-arch, cache-isolated) ─────────────────────
+  # Each platform gets its own job so the GHA cache is scoped per arch,
+  # preventing a cached amd64 builder layer from being served to arm64.
+  build-docker-image:
+    name: Build Docker Image (${{ matrix.platform }})
+    needs: [setup, quality-gates]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive cache scope and arch suffix
+        id: vars
+        run: |
+          # Convert "linux/arm64" → "linux-arm64" for use in cache keys and tags
+          SAFE_PLATFORM="${{ matrix.platform }}"
+          SAFE_PLATFORM="${SAFE_PLATFORM//\//-}"
+          echo "safe_platform=${SAFE_PLATFORM}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push platform image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.platform }}
+          # Push as a per-arch tag; the manifest-merge job will assemble the
+          # final multi-arch index from these two digests.
+          tags: ghcr.io/${{ github.repository }}:${{ needs.setup.outputs.tag }}-${{ steps.vars.outputs.safe_platform }}
+          labels: org.opencontainers.image.version=${{ needs.setup.outputs.tag }}
+          build-args: |
+            APP_VERSION=${{ needs.setup.outputs.tag }}
+          # Cache scope is isolated per platform — prevents amd64 cache entries
+          # from being served to the arm64 build (the root cause of issue #550).
+          cache-from: type=gha,scope=plexus-${{ steps.vars.outputs.safe_platform }}
+          cache-to: type=gha,mode=min,scope=plexus-${{ steps.vars.outputs.safe_platform }}
+
+  # ── Merge multi-arch manifest + smoke test ────────────────────────────
+  build-docker-manifest:
+    name: Build Docker Manifest
+    needs: [setup, build-docker-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}"
+          TAG="${{ needs.setup.outputs.tag }}"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${TAG}-linux-amd64" \
+            "${IMAGE}:${TAG}-linux-arm64"
+
+      - name: Smoke test Docker image (amd64)
+        timeout-minutes: 2
+        run: |
+          echo "Starting smoke test for Docker image..."
+          TEST_ADMIN_KEY="test-admin-key-$(openssl rand -hex 8)"
+
+          docker run -d \
+            --name plexus-smoke-test \
+            -p 4000:4000 \
+            -e DATABASE_URL="sqlite://:memory:" \
+            -e ADMIN_KEY="$TEST_ADMIN_KEY" \
+            ghcr.io/${{ github.repository }}:${{ needs.setup.outputs.tag }}
+
+          echo "Waiting for container to be healthy (30s timeout)..."
+          SECONDS=0
+          MAX_WAIT=30
+
+          while [ $SECONDS -lt $MAX_WAIT ]; do
+            if curl -sf http://localhost:4000/health 2>/dev/null || \
+               curl -sf http://localhost:4000/v1/models 2>/dev/null; then
+              echo "Container started successfully and responded on port 4000"
+              docker stop plexus-smoke-test
+              docker rm plexus-smoke-test
+              exit 0
+            fi
+
+            if ! docker ps -q -f name=plexus-smoke-test | grep -q .; then
+              echo "Container crashed or exited unexpectedly"
+              docker logs plexus-smoke-test 2>/dev/null || true
+              docker rm plexus-smoke-test 2>/dev/null || true
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          echo "Container failed to start within 30 seconds"
+          docker logs plexus-smoke-test 2>/dev/null || true
+          docker stop plexus-smoke-test 2>/dev/null || true
+          docker rm plexus-smoke-test 2>/dev/null || true
+          exit 1
+
+  # ── Publish CLI to npm ─────────────────────────────────────────────────
+  publish-cli:
+    name: Publish CLI to npm
+    needs: [setup, quality-gates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Set up Node for npm trusted publishing
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test CLI package
+        run: |
+          bun run --cwd packages/cli test
+          bun run --cwd packages/cli typecheck
+
+      - name: Set next CLI patch version
+        run: |
+          package_name=$(node -p "require('./packages/cli/package.json').name")
+          latest_version=$(npm view "$package_name" version)
+          next_version=$(node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            if (![major, minor, patch].every(Number.isInteger)) process.exit(1);
+            console.log(`${major}.${minor}.${patch + 1}`);
+          ' "$latest_version")
+          npm pkg set "version=$next_version" --workspace="$package_name"
+          echo "Publishing $package_name@$next_version"
+
+      - name: Publish CLI
+        run: npm publish --workspace=@mcowger/plexus-cli --access public
+
+  # ── Verify binary arch inside each platform image ─────────────────────
+  # Catches the exact failure mode from issue #550: an arm64-labelled image
+  # that actually contains an x86-64 binary.
+  # ── Create Release ─────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [setup, build-binaries, build-docker-manifest, generate-release-notes, publish-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: binaries
+          path: release
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.setup.outputs.tag }}
+          body: ${{ needs.generate-release-notes.outputs.notes }}
+          files: |
+            release/plexus-linux-amd64
+            release/plexus-linux-arm64
+            release/plexus-macos
+            release/plexus.exe
+            release/plexuscli-linux-amd64
+            release/plexuscli-linux-arm64
+            release/plexuscli-macos-amd64
+            release/plexuscli-macos-arm64
+            release/plexuscli.exe
+          draft: false
+          prerelease: false
