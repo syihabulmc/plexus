@@ -4,7 +4,7 @@ import { createAuthHook } from '../../utils/auth';
 import { Dispatcher } from '../../services/dispatch/dispatcher';
 import { UsageStorageService } from '../../services/observability/usage-storage';
 import { QuotaEnforcer } from '../../services/quota/quota-enforcer';
-import { registerModelsRoute } from './models';
+import { registerModelsRoute, registerMuseCodeModelsRoute } from './models';
 import { registerChatRoute } from './chat';
 import { registerMessagesRoute } from './messages';
 import { registerGeminiRoute } from './gemini';
@@ -32,6 +32,7 @@ export async function registerInferenceRoutes(
 
     await protectedRoutes.register(bearerAuth, auth.bearerAuthOptions);
 
+    await registerMuseCodeModelsRoute(protectedRoutes);
     await registerChatRoute(protectedRoutes, dispatcher, usageStorage, quotaEnforcer);
     await registerMessagesRoute(protectedRoutes, dispatcher, usageStorage, quotaEnforcer);
     await registerGeminiRoute(protectedRoutes, dispatcher, usageStorage, quotaEnforcer);

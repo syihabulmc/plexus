@@ -230,6 +230,81 @@ describe('Auth Middleware', () => {
     });
     expect(response.statusCode).toBe(200);
   });
+
+  it('requires auth and returns Muse metadata derived from the configured model', async () => {
+    const config = getConfig();
+    setConfigForTesting({
+      ...config,
+      models: {
+        'muse-spark-1.3': {
+          priority: 'selector',
+          sticky_session: false,
+          targets: [],
+          metadata: {
+            source: 'custom',
+            overrides: {
+              name: 'Muse Spark 1.3',
+              context_length: 1_007_997,
+              architecture: {
+                input_modalities: ['text', 'image'],
+                output_modalities: ['text'],
+              },
+              pricing: {
+                prompt: '0.000002',
+                completion: '0.000008',
+              },
+              supported_parameters: ['tools', 'reasoning'],
+              top_provider: {
+                max_completion_tokens: 128_000,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const unauthorized = await fastify.inject({
+      method: 'GET',
+      url: '/v1/muse-code/models',
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/v1/muse-code/models',
+      headers: { authorization: 'Bearer sk-valid-key' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.json()).toEqual({
+      object: 'list',
+      data: [
+        expect.objectContaining({
+          id: 'muse-spark-1.3',
+          object: 'model',
+          owned_by: 'meta',
+          created: expect.any(Number),
+          metadata: {
+            'muse-code': expect.objectContaining({
+              name: 'muse-spark-1.3',
+              attachment: true,
+              reasoning: true,
+              temperature: false,
+              tool_call: true,
+              modalities: { input: ['text', 'image'], output: ['text'] },
+              limit: { context: 1_007_997, output: 128_000 },
+              cost: {
+                currency: 'USD',
+                input: '0.000002',
+                output: '0.000008',
+                cached: '0.000002',
+              },
+            }),
+          },
+        }),
+      ],
+    });
+  });
 });
 
 describe('Key Attribution', () => {

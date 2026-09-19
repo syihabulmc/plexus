@@ -76,6 +76,39 @@ if (typeof CSS !== 'undefined' && typeof CSS.escape !== 'function') {
   };
 }
 
+/**
+ * crypto.randomUUID polyfill -- MUST be defined before any other imports.
+ *
+ * Why this is needed:
+ *   crypto.randomUUID() is only exposed in secure contexts (HTTPS or localhost).
+ *   When the UI is served over plain HTTP via a LAN/tailnet IP, randomUUID is
+ *   undefined and any direct call throws a TypeError, breaking the playground
+ *   and potentially third-party libraries.
+ *
+ *   crypto.getRandomValues(), by contrast, is available in all contexts, so the
+ *   polyfill builds an RFC 4122 v4 UUID from it.
+ *
+ *   The polyfill is only installed when getRandomValues exists: backing the
+ *   cryptographic crypto.randomUUID API with Math.random() would silently hand
+ *   predictable IDs to callers (including third-party libraries) that rely on
+ *   crypto strength. Where non-crypto IDs are acceptable, use the generateUUID()
+ *   helper in lib/clipboard instead.
+ */
+if (
+  typeof crypto !== 'undefined' &&
+  typeof crypto.randomUUID !== 'function' &&
+  typeof crypto.getRandomValues === 'function'
+) {
+  crypto.randomUUID = (): `${string}-${string}-${string}-${string}-${string}` => {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as `${string}-${string}-${string}-${string}-${string}`;
+  };
+}
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';

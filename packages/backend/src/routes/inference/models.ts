@@ -19,6 +19,27 @@ let openrouterModelsLastModified: string | null = null;
 
 const MODEL_CREATED_AT = Math.floor(Date.now() / 1000);
 
+const MUSE_CODE_STATIC_METADATA = {
+  family: 'avocado',
+  release_date: '2026-09-02',
+  is_hidden: false,
+  options: {
+    reasoningEffort: 'high',
+    forceReasoning: true,
+    include: ['reasoning.encrypted_content'],
+    temperature: 0.9,
+    top_p: 0.9,
+  },
+  variants: {
+    minimal: { reasoningEffort: 'minimal' },
+    low: { reasoningEffort: 'low' },
+    medium: { reasoningEffort: 'medium' },
+    high: { reasoningEffort: 'high' },
+    xhigh: { reasoningEffort: 'xhigh' },
+    max: { reasoningEffort: 'max' },
+  },
+};
+
 export async function registerModelsRoute(fastify: FastifyInstance) {
   /**
    * GET /v1/models
@@ -335,5 +356,81 @@ export async function registerModelsRoute(fastify: FastifyInstance) {
     }
 
     return reply.type('application/json').send(payloadString);
+  });
+}
+
+/**
+ * GET /v1/muse-code/models
+ * Returns configured aliases in the catalog format expected by the Muse CLI.
+ * This route is registered in the authenticated inference scope.
+ */
+export async function registerMuseCodeModelsRoute(fastify: FastifyInstance) {
+  fastify.get('/v1/muse-code/models', async (_request, reply) => {
+    const config = getConfig();
+    const metadataManager = ModelMetadataManager.getInstance();
+
+    const data = Object.entries(config.models).flatMap(([id, modelConfig]) => {
+      const metadata = resolveModelMetadata(
+        id,
+        modelConfig,
+        config.providers,
+        metadataManager
+      )?.metadata;
+      const pricing = metadata?.pricing;
+      const contextLimit = metadata?.context_length ?? metadata?.top_provider?.context_length;
+      const outputLimit = metadata?.top_provider?.max_completion_tokens;
+      if (!metadata || !contextLimit || !outputLimit || !pricing?.prompt || !pricing.completion) {
+        return [];
+      }
+
+      const capabilities = new Set(metadata.supported_parameters);
+      const automaticIdentity = resolveAutomaticModelIdentity(id, modelConfig, config.providers);
+      const piModelConfig =
+        modelConfig.pi_model ??
+        (automaticIdentity.provider
+          ? {
+              provider: automaticIdentity.provider,
+              model_id: automaticIdentity.model,
+            }
+          : undefined);
+      const piModel = piModelConfig
+        ? getCatalogModel(piModelConfig.provider, piModelConfig.model_id)
+        : null;
+
+      return [
+        {
+          id,
+          object: 'model' as const,
+          created: MODEL_CREATED_AT,
+          owned_by: 'meta',
+          metadata: {
+            'muse-code': {
+              name: id,
+              ...MUSE_CODE_STATIC_METADATA,
+              attachment: metadata.architecture?.input_modalities?.includes('image') ?? false,
+              reasoning: piModel?.reasoning ?? capabilities.has('reasoning'),
+              temperature: capabilities.has('temperature'),
+              tool_call: capabilities.has('tools') || capabilities.has('tool_choice'),
+              modalities: {
+                input: metadata.architecture?.input_modalities ?? [],
+                output: metadata.architecture?.output_modalities ?? [],
+              },
+              limit: {
+                context: contextLimit,
+                output: outputLimit,
+              },
+              cost: {
+                currency: 'USD',
+                input: pricing.prompt,
+                output: pricing.completion,
+                cached: pricing.input_cache_read ?? pricing.prompt,
+              },
+            },
+          },
+        },
+      ];
+    });
+
+    return reply.type('application/json').send({ object: 'list', data });
   });
 }
